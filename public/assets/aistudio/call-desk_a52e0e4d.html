@@ -1,0 +1,1520 @@
+<title>Mortgage Protection Call Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: call desk with two views — Dialer (lead queue | live script | lead card) and Pipeline (lead queue | stage board); one pane at a time on narrow screens */
+:root{
+  --bg:#eef1f4; --surface:#ffffff; --surface-2:#f5f7f9; --ink:#14202b; --muted:#5a6676; --rule:#d9dfe6;
+  --accent:#2343b5; --accent-soft:#e5eafa; --accent-ink:#ffffff;
+  --ok:#16724a; --ok-soft:#e1f2e8; --warn:#9a5800; --warn-soft:#fbefd9; --bad:#b0261b; --bad-soft:#fbe5e2;
+  --fe:#7a3f8f; --fe-soft:#f2e7f6;
+  --f-display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body:"Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --bar:60px; --r:8px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0d1217; --surface:#151c23; --surface-2:#1a232c; --ink:#e4e9ef; --muted:#95a1b0; --rule:#2a3541;
+  --accent:#8ea8ff; --accent-soft:#1d2849; --accent-ink:#0d1217;
+  --ok:#62d29b; --ok-soft:#12301f; --warn:#f1b65c; --warn-soft:#382811; --bad:#ff8b80; --bad-soft:#3c1714;
+  --fe:#d7a6ea; --fe-soft:#2e1d37; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0d1217; --surface:#151c23; --surface-2:#1a232c; --ink:#e4e9ef; --muted:#95a1b0; --rule:#2a3541;
+  --accent:#8ea8ff; --accent-soft:#1d2849; --accent-ink:#0d1217;
+  --ok:#62d29b; --ok-soft:#12301f; --warn:#f1b65c; --warn-soft:#382811; --bad:#ff8b80; --bad-soft:#3c1714;
+  --fe:#d7a6ea; --fe-soft:#2e1d37; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 32px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;letter-spacing:-.01em}
+.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+a{color:var(--accent)}
+
+/* top bar */
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--rule);
+  margin-left:calc(-1 * max(16px,env(safe-area-inset-left,0px)));margin-right:calc(-1 * max(16px,env(safe-area-inset-right,0px)));
+  padding:10px max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+.brand{display:flex;align-items:baseline;gap:8px;min-width:0}
+.brand h1{font-size:18px}
+.brand small{color:var(--muted);font-size:12px}
+.sw{display:flex;border:1px solid var(--rule);border-radius:999px;padding:3px;background:var(--surface-2)}
+.sw button{border:0;background:none;border-radius:999px;padding:6px 13px;font-size:13px;color:var(--muted);white-space:nowrap}
+.sw button b{font-family:var(--f-mono);font-weight:500;margin-right:6px}
+.sw button.on{background:var(--accent);color:var(--accent-ink);font-weight:700}
+.stats{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-left:auto;flex-wrap:wrap}
+.stats b{color:var(--ink);font-family:var(--f-mono);font-weight:500;font-size:13px}
+.tbtn{border:1px solid var(--rule);background:var(--surface);border-radius:var(--r);padding:6px 12px;font-size:13px}
+.tbtn:hover{border-color:var(--accent);color:var(--accent)}
+.tbtn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.tbtn.primary:hover{color:var(--accent-ink);filter:brightness(1.08)}
+.panes{display:none;gap:4px;width:100%}
+.panes button{flex:1;border:1px solid var(--rule);background:var(--surface-2);border-radius:var(--r);padding:7px;font-size:13px}
+.panes button.on{border-color:var(--accent);color:var(--accent);font-weight:700;background:var(--accent-soft)}
+
+/* desk */
+.desk{display:grid;grid-template-columns:272px minmax(0,1fr) 340px;gap:20px;align-items:start;padding-top:16px}
+body[data-view="pipeline"] .desk{grid-template-columns:272px minmax(0,1fr)}
+body[data-view="pipeline"] #script,body[data-view="pipeline"] #card{display:none}
+#board{display:none;min-width:0}
+#profile{display:none;min-width:0}
+body[data-view="profile"] .desk{grid-template-columns:minmax(0,1fr)}
+body[data-view="profile"] .desk>*:not(#profile){display:none!important}
+body[data-view="profile"] #profile{display:block}
+.prof{max-width:940px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.psec{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:20px 22px;display:flex;flex-direction:column;gap:12px}
+.psec-h{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.psec h3{font-size:18px}
+.psec .intro{color:var(--muted);font-size:14px;margin:2px 0 0;max-width:70ch}
+.pgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px}
+.phead{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.av{width:96px;height:96px;border-radius:50%;overflow:hidden;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-family:var(--f-display);font-size:32px;font-weight:700;flex:none}
+.av img{width:100%;height:100%;object-fit:cover;display:block}
+.av.sm{width:26px;height:26px;font-size:11px}
+.plinks{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px}
+.plinks label,.plinks button{color:var(--accent);background:none;border:0;padding:0;cursor:pointer;font-weight:700}
+.plinks button.quiet{color:var(--muted);font-weight:400}
+.adj{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.adj label{display:flex;flex-direction:column;gap:2px}
+.adj input{accent-color:var(--accent);width:160px}
+.lrow{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:flex-end;padding:10px 0;border-top:1px dashed var(--rule)}
+.lrow:first-of-type{border-top:0}
+.inrow{display:flex;gap:6px;align-items:center}
+.inrow .fin{flex:1;min-width:0}
+.home{border:1px solid var(--rule);background:var(--surface-2);border-radius:6px;padding:7px 10px;font-size:12px;color:var(--muted)}
+.home.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.rm{border:1px solid var(--rule);background:none;border-radius:6px;padding:7px 10px;font-size:12px;color:var(--bad)}
+.rm.armed{background:var(--bad);border-color:var(--bad);color:var(--surface)}
+.hint{color:var(--muted);font-weight:400;font-size:11px;margin-left:6px}
+.psum{display:flex;flex-wrap:wrap;gap:8px}
+.psum span{font-size:12px;border:1px solid var(--rule);border-radius:999px;padding:3px 10px;color:var(--muted);background:var(--surface-2)}
+.psum b{color:var(--ink);font-family:var(--f-mono);font-weight:500}
+.alerts{display:flex;flex-direction:column;gap:6px}
+.alerts div{font-size:14px;border-radius:var(--r);padding:8px 12px}
+.alerts .warn{background:var(--warn-soft);color:var(--warn)}
+.alerts .bad{background:var(--bad-soft);color:var(--bad)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--warn);margin-left:5px;vertical-align:2px}
+@media (max-width:640px){.pgrid{grid-template-columns:minmax(0,1fr)}.psec{padding:16px}}
+body[data-view="pipeline"] #board{display:block}
+.side{position:sticky;top:calc(var(--bar) + env(safe-area-inset-top,0px) + 16px);max-height:calc(100dvh - var(--bar) - env(safe-area-inset-top,0px) - 32px);overflow:auto;
+  background:var(--surface);border:1px solid var(--rule);border-radius:12px;min-width:0}
+.pad{padding:14px}
+.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}
+
+/* lead list */
+.lhead{display:flex;flex-direction:column;gap:8px;padding:14px;border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--surface);z-index:1}
+.lhead .row{display:flex;gap:6px}
+.search{width:100%;border:1px solid var(--rule);border-radius:var(--r);padding:7px 10px;background:var(--surface-2)}
+.filt{flex:1;min-width:0;border:1px solid var(--rule);border-radius:var(--r);padding:6px 8px;background:var(--surface-2);font-size:13px}
+.lead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;width:100%;text-align:left;border:0;border-bottom:1px solid var(--rule);background:none;padding:10px 14px}
+.lead:hover{background:var(--surface-2)}
+.lead.on{background:var(--accent-soft)}
+.lead .nm{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lead .sub{grid-column:1;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lead .vm{grid-column:2;grid-row:2;font-size:11px;color:var(--muted);font-family:var(--f-mono);justify-self:end}
+.pill{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;white-space:nowrap;justify-self:end;background:var(--surface-2);color:var(--muted);border:1px solid var(--rule)}
+.pill.contacted,.pill.appt,.pill.quoted{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.pill.app{background:var(--ok-soft);color:var(--ok);border-color:transparent}
+.pill.inforce{background:var(--ok);color:var(--surface);border-color:transparent}
+.pill.notint,.pill.dnc{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.pill.callback{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.ty{display:inline-block;font-family:var(--f-mono);font-size:10px;font-weight:500;border-radius:4px;padding:0 4px;margin-right:6px;vertical-align:1px;background:var(--accent-soft);color:var(--accent)}
+.ty.fe{background:var(--fe-soft);color:var(--fe)}
+.tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--warn);margin-left:6px}
+.lfoot{padding:12px 14px;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:8px}
+.linkbtn{border:0;background:none;color:var(--accent);padding:0;font-size:12px;text-align:left;text-decoration:underline}
+
+/* script */
+.script{min-width:0;max-width:780px;width:100%;margin:0 auto}
+.sh{display:flex;flex-direction:column;gap:6px;padding-bottom:14px}
+.sh h2{font-size:30px;line-height:1.1}
+.sh .meta{color:var(--muted);font-size:14px;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center}
+.acro{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.acro span{font-size:12px;color:var(--muted);border:1px solid var(--rule);border-radius:6px;padding:2px 8px;background:var(--surface)}
+.acro b{font-family:var(--f-display);color:var(--accent);margin-right:4px}
+.is-fe .acro b,.is-fe .letter{color:var(--fe)}
+.is-fe .letter{background:var(--fe-soft)}
+.outline{position:sticky;top:calc(var(--bar) + env(safe-area-inset-top,0px));z-index:5;background:var(--bg);display:flex;gap:6px;overflow-x:auto;padding:8px 0 10px;scrollbar-width:thin}
+.outline button{flex:none;border:1px solid var(--rule);background:var(--surface);border-radius:999px;padding:4px 10px;font-size:12px;white-space:nowrap;color:var(--muted)}
+.outline button b{color:var(--accent);font-family:var(--f-display);margin-right:4px}
+.is-fe .outline button b{color:var(--fe)}
+.outline button:hover{border-color:var(--accent);color:var(--ink)}
+.sec{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:18px 22px 20px;margin-bottom:14px;scroll-margin-top:calc(var(--bar) + 64px)}
+.sec-h{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.letter{flex:none;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);font-family:var(--f-display);font-size:18px;font-weight:700}
+.sec-h h3{font-size:19px}
+.blocks{display:flex;flex-direction:column;gap:12px}
+.say{font-size:19px;line-height:1.6;margin:0;max-width:66ch}
+.say.sm{font-size:16px}
+.cue{margin:0;font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:baseline;max-width:70ch}
+.cue .cl{flex:none;font-family:var(--f-mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border:1px solid var(--rule);border-radius:4px;padding:1px 5px}
+.cue.rule .cl{color:var(--bad);border-color:var(--bad)}
+.note{margin:0;font-size:14px;background:var(--surface-2);border-radius:var(--r);padding:10px 12px;max-width:70ch}
+.sub{font-family:var(--f-display);font-size:16px;margin:8px 0 -2px;color:var(--ink)}
+.vline{margin:0;font-size:14px;color:var(--muted);line-height:1.8}
+.tok{color:var(--accent);font-weight:700;background:var(--accent-soft);border-radius:4px;padding:0 .22em;font-variant-numeric:tabular-nums}
+.tok.miss{color:var(--warn);background:var(--warn-soft);font-weight:400;font-style:italic;border-bottom:1px dashed var(--warn)}
+.tok.blank{background:none;padding:0}
+
+/* verify chip */
+.vchip{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--rule);border-radius:6px;padding:0 2px 0 6px;background:var(--accent-soft);vertical-align:baseline;line-height:1.5}
+.vchip .vval{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}
+.vchip.miss{background:var(--warn-soft)}
+.vchip.miss .vval{color:var(--warn);font-weight:400;font-style:italic}
+.vchip.ok{border-color:var(--ok);background:var(--ok-soft)}
+.vchip.ok .vval{color:var(--ok)}
+.vchip.fixed{border-color:var(--warn)}
+.vbtn{border:0;background:none;font-size:12px;padding:0 5px;border-radius:4px;color:var(--muted);line-height:1.6}
+.vbtn:hover{background:var(--surface);color:var(--ink)}
+.vchip.ok .vok{color:var(--ok);font-weight:700}
+.vchip input{border:1px solid var(--accent);border-radius:4px;padding:0 4px;width:12em;font-size:15px;background:var(--surface)}
+
+/* asks + fields */
+.ask{display:grid;grid-template-columns:28px minmax(0,1fr);gap:6px 10px;padding:10px 0;border-top:1px dashed var(--rule)}
+.ask-n{font-family:var(--f-mono);font-size:13px;color:var(--muted);padding-top:4px;text-align:right}
+.ask-q{font-size:17px;line-height:1.5;margin:0}
+.ask-body{display:flex;flex-direction:column;gap:8px;min-width:0}
+.ff{display:flex;flex-wrap:wrap;gap:8px 10px}
+.fld{display:flex;flex-direction:column;gap:3px;flex:1 1 200px;min-width:0}
+.fld.sm{flex:0 1 160px}
+.fld.wide{flex:1 1 100%}
+.fl{font-size:12px;color:var(--muted)}
+.fl .tok{font-size:12px}
+.fin{width:100%;border:1px solid var(--rule);border-radius:6px;padding:7px 9px;background:var(--surface-2);font-size:15px}
+textarea.fin{min-height:58px;resize:vertical}
+.fin:focus{background:var(--surface);border-color:var(--accent)}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{border:1px solid var(--rule);background:var(--surface-2);border-radius:999px;padding:6px 14px;font-size:14px}
+.seg button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.seg.yn button.on[data-v="yes"]{background:var(--bad);border-color:var(--bad);color:var(--surface)}
+.seg.yn button.on[data-v="no"]{background:var(--ok);border-color:var(--ok);color:var(--surface)}
+.hq{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;align-items:center;padding:6px 0;border-top:1px dashed var(--rule);font-size:15px}
+.qq{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.qq li label{display:flex;gap:10px;align-items:baseline;font-size:16px;cursor:pointer}
+.qq input{accent-color:var(--accent);transform:translateY(2px)}
+.qq li label:has(input:checked) span{color:var(--muted);text-decoration:line-through}
+.calc{min-width:0}
+.box{background:var(--surface-2);border-radius:var(--r);padding:12px 14px;font-size:14px}
+.box.warn{background:var(--warn-soft)}
+.box.good{background:var(--ok-soft)}
+.box.bad{background:var(--bad-soft)}
+.box h4{margin:0 0 4px;font-size:13px;font-family:var(--f-display)}
+.chk{display:flex;flex-direction:column;gap:6px;font-size:14px}
+.chk div{display:grid;grid-template-columns:22px minmax(0,1fr);gap:6px}
+.chk i{font-style:normal;font-weight:700}
+.chk .y{color:var(--ok)} .chk .n{color:var(--bad)} .chk .q{color:var(--warn)}
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 14px;font-size:14px;margin:0}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.kv dd.miss{color:var(--warn);font-weight:400;font-style:italic}
+.cf{width:100%;border-collapse:collapse;font-size:14px}
+.cf td{padding:6px 0;border-bottom:1px solid var(--rule)}
+.cf td:last-child{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.cf tr.total td{font-weight:700;border-bottom:0}
+.neg{color:var(--bad)}
+.pos{color:var(--ok)}
+.optrow{display:grid;grid-template-columns:minmax(0,1.2fr) 1fr 1fr;gap:10px;align-items:end;padding:8px 0;border-top:1px dashed var(--rule)}
+.optlab b{display:block;font-size:15px}
+.optlab span{font-size:12px;color:var(--muted)}
+.act{align-self:flex-start;border:1px solid var(--accent);background:var(--surface);color:var(--accent);border-radius:var(--r);padding:9px 16px;font-weight:700}
+.act.primary{background:var(--accent);color:var(--accent-ink)}
+.act:hover{filter:brightness(1.05)}
+.acts{display:flex;flex-wrap:wrap;gap:8px}
+.busy{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.busy div{background:var(--surface-2);border-radius:var(--r);padding:10px 12px}
+.busy b{display:block;font-family:var(--f-mono);font-size:22px;font-weight:500}
+.busy span{font-size:12px;color:var(--muted)}
+.bar{height:5px;border-radius:3px;background:var(--rule);margin-top:6px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.dialrow{display:flex;flex-direction:column;gap:6px}
+.dialrow .seg button{font-size:13px;padding:5px 12px}
+
+/* card */
+.card-h{padding:14px;border-bottom:1px solid var(--rule);display:flex;flex-direction:column;gap:10px}
+.card-h h2{font-size:21px}
+.card-h>.fld,.cs>.fld{flex:none}
+.phone{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.phone .num{font-size:17px;user-select:all}
+.mini{border:1px solid var(--rule);background:var(--surface-2);border-radius:6px;padding:3px 8px;font-size:12px}
+.mini:hover{border-color:var(--accent);color:var(--accent)}
+.stepper{display:flex;flex-wrap:wrap;gap:4px}
+.stp{border:1px solid var(--rule);background:var(--surface);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--muted)}
+.stp.done{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.stp.cur{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+.stp.park.cur{background:var(--warn);border-color:var(--warn);color:var(--surface)}
+.stp.park.cur.bad{background:var(--bad);border-color:var(--bad)}
+.cs{padding:14px;border-bottom:1px solid var(--rule);display:flex;flex-direction:column;gap:10px}
+.cs:last-child{border-bottom:0}
+.vrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;align-items:center;font-size:13px}
+.vrow .vl{color:var(--muted);font-size:12px}
+.vrow .vv{font-weight:700;overflow-wrap:anywhere}
+.vrow .vv.miss{color:var(--warn);font-weight:400;font-style:italic}
+.vrow .vs{grid-row:1/3;grid-column:2;border:1px solid var(--rule);background:var(--surface);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+.vrow .vs.ok{background:var(--ok-soft);color:var(--ok);border-color:transparent;font-weight:700}
+.vrow .vs.fixed{background:var(--warn-soft);color:var(--warn);border-color:transparent;font-weight:700}
+.vrow .was{font-size:11px;color:var(--muted)}
+.meter{display:flex;justify-content:space-between;align-items:baseline}
+.meter b{font-family:var(--f-mono);font-weight:500}
+details>summary{cursor:pointer;font-weight:700;font-size:13px;list-style:none;display:flex;justify-content:space-between}
+details>summary::after{content:"+";color:var(--muted)}
+details[open]>summary::after{content:"–"}
+details>summary::-webkit-details-marker{display:none}
+.phr{margin:8px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;font-size:13.5px}
+.phr li{padding-left:10px;border-left:2px solid var(--rule)}
+.phr .why{display:block;font-size:12px;color:var(--muted)}
+.log{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
+.log li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;font-size:13px}
+.log .lk{font-family:var(--f-mono);font-size:10px;text-transform:uppercase;letter-spacing:.04em;border-radius:4px;padding:1px 5px;background:var(--surface-2);color:var(--muted);align-self:start;margin-top:2px}
+.log .lk.stage{background:var(--accent-soft);color:var(--accent)}
+.log .lk.note,.log .lk.talk{background:var(--ok-soft);color:var(--ok)}
+.log .lt{grid-column:2;font-size:11px;color:var(--muted)}
+.log .lx{grid-column:2;grid-row:1;overflow-wrap:anywhere;white-space:pre-wrap}
+.danger{border:1px solid var(--rule);background:none;color:var(--bad);border-radius:6px;padding:6px 10px;font-size:12px}
+.danger.armed{background:var(--bad);color:var(--surface);border-color:var(--bad)}
+.extra{font-size:12px}
+.empty{padding:40px 24px;text-align:center;color:var(--muted);background:var(--surface);border:1px dashed var(--rule);border-radius:12px}
+.empty h2{color:var(--ink);font-size:22px;margin-bottom:6px}
+
+/* pipeline board */
+.bsum{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+.bsum>div{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:12px 14px;flex:1 1 180px;min-width:0}
+.bsum b{display:block;font-family:var(--f-mono);font-weight:500;font-size:22px}
+.bsum span{font-size:12px;color:var(--muted)}
+.due{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:12px 14px;margin-bottom:14px}
+.due ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;font-size:14px}
+.due li button{border:0;background:none;padding:0;color:var(--accent);font-weight:700;text-align:left}
+.due .late{color:var(--bad);font-size:12px;margin-left:6px}
+.cols{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(210px,1fr);gap:12px;overflow-x:auto;padding-bottom:8px}
+.col{background:var(--surface-2);border:1px solid var(--rule);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:140px}
+.col-h{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;padding:2px 4px}
+.col-h span{font-family:var(--f-mono);color:var(--muted)}
+.mc{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px;font-size:13px}
+.mc .mo{border:0;background:none;padding:0;text-align:left;font-weight:700;font-size:14px;color:var(--ink)}
+.mc .mo:hover{color:var(--accent)}
+.mc .ms{color:var(--muted);font-size:12px}
+.mc .mf{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.mc .nx{border:1px solid var(--rule);background:var(--surface-2);border-radius:6px;padding:2px 7px;font-size:11px;color:var(--muted)}
+.mc .nx:hover{color:var(--accent);border-color:var(--accent)}
+.mc .fu{font-size:11px;color:var(--warn)}
+.col-empty{color:var(--muted);font-size:12px;margin:4px}
+
+/* modal */
+.modal{position:fixed;inset:0;z-index:50;background:rgb(10 15 20 / .45);display:flex;align-items:flex-start;justify-content:center;
+  padding:calc(env(safe-area-inset-top,0px) + 40px) max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px));overflow:auto}
+.mbox{background:var(--surface);border-radius:14px;border:1px solid var(--rule);width:100%;max-width:760px;padding:20px;display:flex;flex-direction:column;gap:12px}
+.mbox h2{font-size:21px}
+.mbox p{margin:0;color:var(--muted);font-size:14px}
+.maptbl{overflow-x:auto;border:1px solid var(--rule);border-radius:var(--r);max-height:46vh}
+.maptbl table{border-collapse:collapse;width:100%;font-size:13px;min-width:520px}
+.maptbl th,.maptbl td{padding:6px 10px;border-bottom:1px solid var(--rule);text-align:left}
+.maptbl td.ex{color:var(--muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.maptbl select{border:1px solid var(--rule);border-radius:6px;padding:4px;background:var(--surface-2);font-size:13px}
+.mrow{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+.msg{font-size:13px;color:var(--ok);margin-right:auto}
+.msg.err{color:var(--bad)}
+.drop{border:2px dashed var(--rule);border-radius:var(--r);padding:18px;text-align:center;color:var(--muted);font-size:14px}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+
+@media (max-width:1080px){
+  .panes{display:flex}
+  .stats{margin-left:0}
+  .desk,body[data-view="pipeline"] .desk{grid-template-columns:minmax(0,1fr)}
+  .side{position:static;max-height:none}
+  .desk>[data-pane]{display:none}
+  body[data-pane="leads"] .desk>[data-pane="leads"],body[data-pane="script"] .desk>[data-pane="script"],body[data-pane="card"] .desk>[data-pane="card"]{display:block}
+  body[data-view="pipeline"] .desk>[data-pane]{display:none!important}
+  body[data-view="pipeline"] .panes,body[data-view="profile"] .panes{display:none}
+}
+@media (max-width:560px){
+  .say{font-size:17px}
+  .sec{padding:14px 14px 16px}
+  .sh h2{font-size:24px}
+  .ask{grid-template-columns:minmax(0,1fr)}
+  .ask-n{text-align:left;padding:0}
+  .optrow{grid-template-columns:1fr 1fr}
+  .optlab{grid-column:1/-1}
+  .busy b{font-size:18px}
+  .sw button{padding:6px 10px}
+}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+
+<header class="top" id="top">
+  <div class="brand"><span class="av sm" data-av></span><h1>Call Desk</h1><small>Mortgage protection · Final expense</small></div>
+  <div class="sw" role="group" aria-label="View">
+    <button type="button" data-act="view" data-v="dialer" id="vDial">Dialer</button>
+    <button type="button" data-act="view" data-v="pipeline" id="vPipe">Pipeline</button>
+    <button type="button" data-act="view" data-v="profile" id="vProf">Profile<span id="profDot"></span></button>
+  </div>
+  <div class="sw" role="group" aria-label="Script step" id="steps"></div>
+  <div class="stats" id="stats"></div>
+  <button type="button" class="tbtn" data-act="openSettings">Settings</button>
+  <div class="panes" role="group" aria-label="Show panel">
+    <button type="button" data-act="pane" data-pane="leads">Leads</button>
+    <button type="button" data-act="pane" data-pane="script">Script</button>
+    <button type="button" data-act="pane" data-pane="card">Lead card</button>
+  </div>
+</header>
+
+<datalist id="carrierList"></datalist>
+
+<main class="desk">
+  <aside class="side" data-pane="leads" aria-label="Leads">
+    <div class="lhead">
+      <div class="row"><button type="button" class="tbtn primary" data-act="openImport" style="flex:1">Import spreadsheet</button><button type="button" class="tbtn" data-act="addLead">+ Lead</button></div>
+      <input class="search" id="q" type="search" placeholder="Search name, phone, city, email">
+      <div class="row"><select class="filt" id="filt" aria-label="Filter by stage"></select><select class="filt" id="tfilt" aria-label="Filter by lead type"><option value="">All types</option><option value="mp">Mortgage</option><option value="fe">Final expense</option></select></div>
+    </div>
+    <div id="list"></div>
+    <div class="lfoot" id="lfoot"></div>
+  </aside>
+  <section class="script" data-pane="script" id="script" aria-label="Script"></section>
+  <aside class="side" data-pane="card" id="card" aria-label="Lead card"></aside>
+  <section id="board" aria-label="Pipeline"></section>
+  <section id="profile" aria-label="Agent profile"></section>
+</main>
+
+<div class="modal" id="importM" hidden>
+  <div class="mbox" role="dialog" aria-labelledby="impT">
+    <h2 id="impT">Import leads</h2>
+    <p>Drop a CSV or Excel file, or copy the rows from Google Sheets (header row included) and paste them below. You'll confirm which column is which before anything is added.</p>
+    <label class="fld sm" for="impType"><span class="fl">Lead type</span><select class="fin" id="impType"><option value="auto">Detect from the sheet</option><option value="fe">Final expense</option><option value="mp">Mortgage protection</option></select></label>
+    <label class="drop" id="drop" for="file">Drop a .csv, .tsv or .xlsx file here, or <u>choose a file</u><input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xls" hidden></label>
+    <textarea class="fin" id="paste" rows="4" placeholder="…or paste rows here (first row = column headers)"></textarea>
+    <div class="mrow"><span class="msg" id="impMsg"></span><button type="button" class="tbtn" data-act="readPaste">Read pasted rows</button></div>
+    <div id="mapWrap" hidden>
+      <p style="margin-bottom:8px">Check the column matches. Anything set to "Keep as extra" still shows on the lead card.</p>
+      <div class="maptbl" id="mapTbl"></div>
+    </div>
+    <div class="mrow"><button type="button" class="tbtn" data-act="closeM">Cancel</button><button type="button" class="tbtn primary" data-act="doImport" id="doImp" disabled>Add leads</button></div>
+  </div>
+</div>
+
+<div class="modal" id="setM" hidden>
+  <div class="mbox" role="dialog" aria-labelledby="setT" style="max-width:560px">
+    <h2 id="setT">Settings</h2>
+    <div class="ff">
+      <label class="fld sm"><span class="fl">Offer time A</span><input class="fin" id="s-timeA" data-s="timeA"></label>
+      <label class="fld sm"><span class="fl">Offer time B</span><input class="fin" id="s-timeB" data-s="timeB"></label>
+    </div>
+    <p>Your name, agency, callback number, licensed states and writing numbers now live in <button type="button" class="linkbtn" data-act="view" data-v="profile" style="font-size:14px">Profile</button>.</p>
+    <p>Leads, notes, activity and your profile are saved in this browser only. Export copies everything as CSV you can paste back into a sheet.</p>
+    <div class="mrow"><span class="msg" id="expMsg"></span><button type="button" class="tbtn" data-act="exportCsv">Export all leads (copy CSV)</button><button type="button" class="tbtn primary" data-act="closeM">Done</button></div>
+    <textarea class="fin" id="expArea" rows="5" hidden readonly aria-label="CSV export"></textarea>
+  </div>
+</div>
+
+<script>
+const KEY='mpCallDesk.v1';
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num=v=>{const n=parseFloat(String(v??'').replace(/[^0-9.\-]/g,''));return isFinite(n)?n:NaN};
+const has=v=>v!==undefined&&v!==null&&String(v).trim()!=='';
+const money=n=>isFinite(n)?'$'+Math.round(n).toLocaleString('en-US'):'';
+const money2=n=>isFinite(n)?'$'+n.toLocaleString('en-US',{minimumFractionDigits:n%1?2:0,maximumFractionDigits:2}):'';
+const ord=n=>{n=Math.round(n);const s=['th','st','nd','rd'],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0])};
+const uid=()=>Math.random().toString(36).slice(2,9);
+const TODAY=new Date();
+const STAGES=[['new','New lead'],['contacted','Contacted'],['appt','Appointment set'],['quoted','Quoted'],['app','Application'],['inforce','Policy in force']];
+const PARKED=[['callback','Call back'],['notint','Not interested'],['dnc','Do not call']];
+const STATUS=STAGES.concat(PARKED), STATUS_L=Object.fromEntries(STATUS), STAGE_I=Object.fromEntries(STAGES.map(([k],i)=>[k,i]));
+const MIGRATE={noans:'new',presented:'quoted',sold:'app'};
+const YN=[['no','No'],['yes','Yes']];
+const LOGK={na:'No answer',vm:'Voicemail',text:'Text',talk:'Talked',note:'Note',call:'Call',stage:'Stage'};
+
+/* ---------- states, time zones ---------- */
+const ST={AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',DC:'District of Columbia',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming'};
+const ZONES={'America/New_York':'CT DE DC FL GA IN KY ME MD MA MI NH NJ NY NC OH PA RI SC VT VA WV','America/Chicago':'AL AR IL IA KS LA MN MS MO NE ND OK SD TN TX WI','America/Denver':'CO ID MT NM UT WY','America/Phoenix':'AZ','America/Los_Angeles':'CA NV OR WA','America/Anchorage':'AK','Pacific/Honolulu':'HI'};
+const TZ_OF={};Object.entries(ZONES).forEach(([z,l])=>l.split(' ').forEach(a=>TZ_OF[a]=z));
+function stAbbr(s){s=String(s||'').trim();if(!s)return '';if(/^[A-Za-z]{2}$/.test(s))return s.toUpperCase();const k=Object.keys(ST).find(a=>ST[a].toLowerCase()===s.toLowerCase());return k||''}
+const stName=s=>ST[stAbbr(s)]||s||'';
+const P=()=>S.profile;
+const licensedList=()=>(P().states||[]).map(x=>stAbbr(x.st)).filter(Boolean);
+const licFor=st=>{const ab=stAbbr(st);const r=(P().states||[]).find(x=>stAbbr(x.st)===ab);return r?r.num:''};
+function clientTime(st){const ab=stAbbr(st),z=TZ_OF[ab];if(!z)return null;const now=new Date();
+  try{const txt=new Intl.DateTimeFormat('en-US',{timeZone:z,hour:'numeric',minute:'2-digit'}).format(now);const h=+new Intl.DateTimeFormat('en-US',{timeZone:z,hour:'numeric',hourCycle:'h23'}).format(now);return {txt,h:h%24,z}}catch(e){return null}}
+
+/* ---------- dates ---------- */
+function parseDate(s){
+  if(!has(s))return null; s=String(s).trim(); let m;
+  if(m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2}))?/))return new Date(+m[1],m[2]-1,+m[3],+(m[4]||0),+(m[5]||0));
+  if(m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})(?:[ ,T]+(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])?)?$/)){
+    let y=+m[3];if(y<100)y+=y>(TODAY.getFullYear()%100)?1900:2000;let h=+(m[4]||0);const ap=(m[6]||'').toLowerCase();if(ap==='pm'&&h<12)h+=12;if(ap==='am'&&h===12)h=0;
+    return new Date(y,m[1]-1,+m[2],h,+(m[5]||0))}
+  if(/^\d{5}$/.test(s)){const d=new Date(1899,11,30);d.setDate(d.getDate()+ +s);return d}
+  const t=Date.parse(s);return isNaN(t)?null:new Date(t);
+}
+const fmtD=d=>d?d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+const fmtDT=t=>new Date(t).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+function yearsSince(d){let a=TODAY.getFullYear()-d.getFullYear();const md=TODAY.getMonth()-d.getMonth();if(md<0||(md===0&&TODAY.getDate()<d.getDate()))a--;return a}
+function ageOf(L){if(L.ageOverride&&has(L.age))return num(L.age);const d=parseDate(L.dob);if(d)return yearsSince(d);return has(L.age)?num(L.age):NaN}
+function spAgeOf(L){if(L.spouseAgeOverride&&has(L.spouseAge))return num(L.spouseAge);const d=parseDate(L.spouseDob);if(d)return yearsSince(d);return has(L.spouseAge)?num(L.spouseAge):NaN}
+function addDays(n){const d=new Date(TODAY);d.setDate(d.getDate()+n);return d}
+const dayLabel=d=>d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+const startOfDay=d=>new Date(d.getFullYear(),d.getMonth(),d.getDate());
+function fmtAppt(s){const d=parseDate(s);if(!d)return s||'';const diff=Math.round((startOfDay(d)-startOfDay(TODAY))/864e5);
+  const w=d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});return diff===0?'today, '+w:diff===1?'tomorrow, '+w:w}
+function weekKey(){const d=new Date(TODAY);const day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);return d.toISOString().slice(0,10)}
+function leadHours(L){const d=parseDate(L.leadDate);return d?(Date.now()-d.getTime())/36e5:NaN}
+const autoOpener=L=>{const h=leadHours(L);return isFinite(h)&&h>72?'B':'A'};
+const op=L=>L.opener||autoOpener(L);
+function whenTok(L){const d=parseDate(L.leadDate);if(!d)return '';const diff=Math.round((startOfDay(TODAY)-startOfDay(d))/864e5);
+  if(diff<=0)return d.getHours()<12?'this morning':'today';if(diff===1)return 'yesterday';if(diff<7)return 'on '+d.toLocaleDateString('en-US',{weekday:'long'});return 'a while back'}
+function ageText(L){const h=leadHours(L);if(!isFinite(h))return 'No lead date';if(h<1)return 'Under an hour old';if(h<48)return Math.round(h)+' hours old';return Math.round(h/24)+' days old'}
+
+/* ---------- state ---------- */
+function newLead(o={}){return Object.assign({id:uid(),type:'mp',status:'new',step:1,dials:0,v:{},orig:{},extra:{},log:[],stageAt:{new:Date.now()},created:Date.now()},o)}
+const DEF_SET={timeA:'5:15 pm',timeB:'6:45 pm'};
+const ROLES=['Agent','Agency owner','Manager','Recruiter','Trainee'];
+const WSTAT=['Appointed','Pending','Inactive'];
+function blankProfile(){return {name:'',role:'Agent',phone:'',email:'',booking:'',imo:'',callAgency:'',callPhone:'',quoteUrl:'',qpMp:'',qpFe:'',qpContact:'no',photo:'',photoX:50,photoY:35,npn:'',states:[],writing:[],dob:'',dl:'',dlState:'',aml:'',amlDate:'',eo:'',eoPolicy:'',eoCert:'',eoExp:''}}
+/* Andrew's details from his licensing screenshots. DOB and driver's license number are left for him to type. */
+const ANDREW={name:'Andrew Chavis',role:'Agent',phone:'(803) 873-4019',email:'andrew.chavissfg@gmail.com',imo:'Symmetry Financial Group (SFG)',callAgency:'EST8 Financial',callPhone:'(361) 761-0910',npn:'21644305',
+  states:[['MI','21644305'],['OH','1735870'],['SC','21644305'],['TX','3357586',true],['VA','1580090']],
+  writing:[['American General','1QUPQ'],['Americo','DPAAW2'],['Banner Life (BeyondTerm)','ASU12239'],['Fidelity and Guaranty','000784282'],['Legal & General America (Obsolete)','ASU12239','Inactive'],['Liberty Bankers','LBL84766WL'],['Mutual of Omaha','1241690'],['Occidental','0007047433'],['SBLI','132829'],['SBLI','154425'],['Transamerica','0097175119'],['United Home Life','L000262928']],
+  dlState:'TX',aml:'SuranceBay, LLC.',amlDate:'2026-10-05',eo:'Next Insurance US Company',eoPolicy:'NXTPWFKTQ3-00-PL',eoCert:'083312270',eoExp:'2027-06-08'};
+function sampleFE(){const d=new Date(Date.now()-26*36e5);const ds=`${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(2)} 9:14:02 AM`;
+  return newLead({id:'s4',sample:true,type:'fe',firstName:'Gloria',lastName:'Benton',dob:'4/9/1955',phone:'(419) 555-0176',email:'gloria.b@example.com',state:'Ohio',city:'Toledo',zip:'43615',amountRequested:'$15,000',benRel:'My Children',beneficiary:'Keisha Benton',hasLife:'No',heartStrokeCancer:'No',gender:'Female',hobby:'Gardening',platform:'fb',ad:'Sample ad',leadDate:ds,interestedIn:'Final Expense Insurance'})}
+function seed(){
+  return {set:{...DEF_SET},stats:{week:weekKey(),dials:0,appts:0,apps:0},active:'s4',view:'dialer',
+    leads:[sampleFE(),
+      newLead({id:'s1',sample:true,firstName:'Marcus',lastName:'Reed',phone:'(832) 555-0147',email:'marcus.reed@example.com',address:'1438 Willow Bend Dr',city:'Pearland',state:'TX',zip:'77581',loanAmount:'286000',lender:'Gulf Coast Mortgage',dob:'06/14/1986',spouseName:'Tanya',spouseDob:'02/02/1988',leadSource:'Mail-in (sample)',leadDate:'10/28/2026'}),
+      newLead({id:'s2',sample:true,firstName:'Linda',lastName:'Okafor',phone:'(281) 555-0193',email:'',address:'2207 Briar Glen Ln',city:'Katy',state:'TX',zip:'77449',loanAmount:'142500',dob:'09/30/1958',leadSource:'Digital (sample)',leadDate:'10/30/2026'}),
+      newLead({id:'s3',sample:true,firstName:'Daniel',lastName:'Ruiz',phone:'(713) 555-0112',address:'908 Cypress Point',city:'Spring',state:'TX',zip:'77373',loanAmount:'318750',age:'41',spouseName:'Maria',leadSource:'Mail-in (sample)',leadDate:'11/01/2026'})
+    ]};
+}
+function load(){try{const r=localStorage.getItem(KEY);return r?JSON.parse(r):null}catch(e){return null}}
+const LOADED=load();
+let S=LOADED||seed();
+S.set=Object.assign({...DEF_SET},S.set||{});
+if(!S.profile){
+  const pr=blankProfile();
+  if(LOADED){const a=ANDREW;Object.assign(pr,{...a,states:a.states.map(([st,num,home])=>({id:uid(),st,num,home:!!home,exp:''})),writing:a.writing.map(([carrier,num,status])=>({id:uid(),carrier,num,status:status||'Appointed'}))});
+    if(has(S.set.agent))pr.name=S.set.agent==='Andrew'?'Andrew Chavis':S.set.agent;if(has(S.set.agency))pr.callAgency=S.set.agency;if(has(S.set.phone))pr.callPhone=S.set.phone;}
+  S.profile=pr;
+}
+S.profile=Object.assign(blankProfile(),S.profile);
+if(!has(S.profile.qpMp)&&/20009a4c1a8eb5e9\.quoteplicity\.com/.test(S.profile.quoteUrl||''))S.profile.qpMp='https://20009a4c1a8eb5e9.quoteplicity.com/quote/no-exam';
+if(!S.stats||S.stats.week!==weekKey())S.stats={week:weekKey(),dials:0,appts:0,apps:0};
+S.stats.apps=S.stats.apps||0; S.view=S.view||'dialer';
+S.leads.forEach(L=>{if(MIGRATE[L.status])L.status=MIGRATE[L.status];if(!STATUS_L[L.status])L.status='new';L.type=L.type||'mp';L.log=L.log||[];L.stageAt=L.stageAt||{};L.v=L.v||{};L.orig=L.orig||{};L.extra=L.extra||{};
+  if(has(L.notes)){L.log.unshift({t:Date.now(),k:'note',x:L.notes});L.notes=''}});
+if(S.leads.some(l=>l.sample)&&!S.leads.some(l=>l.type==='fe'))S.leads.unshift(sampleFE());
+let saveT;function save(){clearTimeout(saveT);saveT=setTimeout(()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}},250)}
+const cur=()=>S.leads.find(l=>l.id===S.active)||null;
+const isFE=L=>L&&L.type==='fe';
+const isMarried=L=>L.married?L.married==='yes':has(L.spouseName);
+const fullName=L=>[L.firstName,L.lastName].filter(has).join(' ')||'Unnamed lead';
+const fullAddr=L=>{const c=[L.city,[L.state,L.zip].filter(has).join(' ')].filter(has).join(', ');return [L.address,c].filter(has).join(', ')};
+const PLAT={fb:'Facebook',meta:'Facebook',ig:'Instagram',google:'Google','google-ads':'Google',yt:'YouTube',tiktok:'TikTok'};
+const platName=p=>PLAT[String(p||'').toLowerCase()]||'Facebook or Google';
+function prettyRel(r){r=String(r||'').trim();const m={'my children':'your children','children':'your children','my spouse':'your spouse','spouse':'your spouse','other':''};return r.toLowerCase() in m?m[r.toLowerCase()]:r.toLowerCase()}
+function bw(L){const a=num(L.incomeA)||0,b=num(L.incomeB)||0,first=L.firstName||'them',sp=L.spouseName||'your spouse';
+  if(isMarried(L))return b>a?{name:sp,other:first}:{name:first,other:sp};return {name:first,other:L.beneficiary||'your family'}}
+const HEALTHY=/^(none|no|n\/?a|nothing|healthy|good|great|fine|na|nope)\.?$/i;
+function road(L){
+  const a=ageOf(L),nm=L.firstName||'They';
+  const flags=['health','meds','hospital','history'].filter(k=>has(L[k])&&!HEALTHY.test(String(L[k]).trim()));
+  if(isFinite(a)&&a>65)return {k:'cp',t:'Lead with Critical Period',why:`${nm} is ${a}. Over 65, full payoff is usually the most expensive and hardest to qualify for.`};
+  if(flags.length)return {k:'partial',t:'Partial payoff or Critical Period',why:`Health answers to review: ${flags.map(f=>({health:'medical issues',meds:'medications',hospital:'hospital stays',history:'health history'})[f]).join(', ')}. These may limit full payoff.`};
+  if(isFinite(a))return {k:'full',t:'Full or partial payoff',why:`${nm} is ${a} with no health flags. Under 65 and healthy: don't present Critical Period.`};
+  return {k:'',t:'Not enough info yet',why:'Add age and the CQF health answers to get a suggested road.'};
+}
+const FE_TIER=['Gold','Silver','Bronze'];
+function chosenText(L){const i=L.chosen;if(!i)return '';const c=num(L['optCov'+i]),p=num(L['optPrem'+i]);
+  const lab=isFE(L)?FE_TIER[i-1]+' plan':optLabel(L,+i).t;return [lab, isFinite(c)?money(c)+' of coverage':'', isFinite(p)?money2(p)+' a month':''].filter(Boolean).join(', ')}
+const PLAN_LINE={level:'day-one coverage, meaning it pays the full amount from the first day',graded:'a plan with a {w}-year waiting period on natural causes, but accidents are covered from day one',gi:'a guaranteed-issue plan with a {w}-year waiting period on natural causes, but accidents are covered from day one'};
+
+/* ---------- stage changes and activity ---------- */
+function logAct(L,k,x){L.log=L.log||[];L.log.unshift({t:Date.now(),k,x})}
+function setStage(L,s){
+  if(!L||L.status===s)return;const prev=L.status;L.status=s;L.stageAt[s]=Date.now();
+  if(s==='appt')S.stats.appts++; if(s==='app')S.stats.apps++;
+  logAct(L,'stage',`${STATUS_L[prev]||'—'} → ${STATUS_L[s]}`);
+}
+
+/* ---------- tokens & verifiable fields ---------- */
+const TOK={
+  first:[L=>L.firstName,'first name'], last:[L=>L.lastName,'last name'], full:[L=>[L.firstName,L.lastName].filter(has).join(' '),'client name'],
+  agent:[()=>P().name,'your name (add in Profile)'], agency:[()=>P().callAgency||P().imo,'agency (add in Profile)'], agentPhone:[()=>P().callPhone||P().phone,'your number (add in Profile)'],
+  npn:[()=>P().npn,'NPN'], licNum:[L=>licFor(L.state),'license #'],
+  nextAge:[L=>{const a=ageOf(L);return isFinite(a)?a+1:''},'next age'],
+  bday:[L=>{const d=parseDate(L.dob);return d?d.toLocaleDateString('en-US',{month:'long',day:'numeric'}):''},'birthday'],
+  spouse:[L=>L.spouseName,"spouse's name"], andSpouse:[L=>isMarried(L)?' and '+(L.spouseName||'your spouse'):'',''],
+  beneficiary:[L=>L.beneficiary||(isMarried(L)&&!isFE(L)?L.spouseName:''),'beneficiary'],
+  loan:[L=>money(num(L.loanAmount)),'loan amount'], halfLoan:[L=>money(num(L.loanAmount)/2),'half the loan'],
+  payment:[L=>money(num(L.monthlyPayment)),'monthly payment'], homeValue:[L=>money(num(L.homeValue)),'what it would sell for'],
+  equity:[L=>{const e=num(L.homeValue)-num(L.loanAmount);return isFinite(e)?money(e):''},'equity'],
+  concern:[L=>L.mainConcern,'their main concern'], goal:[L=>L.goal,'what they want it to do'],
+  occupation:[L=>L.occupation,'their work'], purchase:[L=>({bought:'just bought',refi:'refinanced'})[L.purchaseType]||'','bought or refinanced'],
+  apptDay:[L=>fmtAppt(L.apptDay),'the day'], apptTime:[L=>L.apptTime,'the time'],
+  timeA:[()=>S.set.timeA,'time A'], timeB:[()=>S.set.timeB,'time B'],
+  breadwinner:[L=>bw(L).name,'breadwinner'], survivor:[L=>bw(L).other,'the survivor'],
+  incomeA:[L=>money(num(L.incomeA)),'their monthly income'], chosen:[L=>chosenText(L),'the option they picked'],
+  benFull:[L=>L.benFull||L.beneficiary,"beneficiary's full name"], months:[L=>L.monthsNeeded,'months'],
+  /* final expense */
+  when:[L=>whenTok(L),'today / this morning / yesterday'], platform:[L=>platName(L.platform),''],
+  state:[L=>stName(L.state),'state'], city:[L=>L.city,'city'], hobby:[L=>L.hobby,'hobby'],
+  oneDetail:[L=>{if(has(L.beneficiary))return `${L.beneficiary} as who you'd want to take care of`;const d=parseDate(L.dob);if(d)return 'your birthday as '+d.toLocaleDateString('en-US',{month:'long',day:'numeric'});return L.city?'that you live in '+L.city:''},'one detail from the lead'],
+  cityOrMonth:[L=>L.city||(parseDate(L.dob)?'a birth month of '+parseDate(L.dob).toLocaleDateString('en-US',{month:'long'}):''),'city / birth month'],
+  amountReq:[L=>L.amountRequested,'amount requested'],
+  carrier:[L=>L.carrier,'carrier'], amBest:[L=>L.amBest,'A.M. Best rating'], years:[L=>L.carrierYears,'X'],
+  planLine:[L=>{const t=PLAN_LINE[L.planType];return t?t.replace('{w}',L.waitYears||'2'):''},'day-one coverage / a plan with a waiting period'],
+  payday:[L=>{const n=num(L.payday);return isFinite(n)&&/^\s*\d/.test(L.payday)?ord(n):L.payday},'payday'],
+  draftDay:[L=>{const n=num(L.payday);return isFinite(n)&&/^\s*\d/.test(L.payday)?ord(n%31+1):(has(L.payday)?'day after':'')},'day after'],
+  budget:[L=>money(num(L.budget)),'their budget'],
+  feCov1:[L=>money(num(L.optCov1)),'$25,000'], feCov2:[L=>money(num(L.optCov2)),'$15,000'], feCov3:[L=>money(num(L.optCov3)),'$10,000'],
+  fePrem1:[L=>money2(num(L.optPrem1)),'$__'], fePrem2:[L=>money2(num(L.optPrem2)),'$__'], fePrem3:[L=>money2(num(L.optPrem3)),'$__'],
+  lowerAmt:[L=>money(num(L.lowerAmt)),'lower amount'],
+  benIsnt:[L=>{const n=String(L.beneficiary||'');return /\band\b|&|,/.test(n)||/children|kids/i.test(L.benRel||'')&&!n?'aren\'t':'isn\'t'},''], lowerPrem:[L=>money2(num(L.lowerPrem)),'$__']
+};
+function tokVal(k,L){const t=TOK[k];if(!t)return {v:'{{'+k+'}}',ph:''};const v=L?t[0](L):'';return {v:has(v)?String(v):'',ph:t[1]}}
+const plainFill=(s,L)=>s.replace(/\{\{(\w+)\}\}/g,(m,k)=>{const {v,ph}=tokVal(k,L);return v||(ph?'['+ph+']':'')});
+const VF={
+  firstName:{label:'First name'}, lastName:{label:'Last name'}, phone:{label:'Phone'}, email:{label:'Email'},
+  address:{label:'Address',show:fullAddr,set:(L,v)=>{L.address=v;L.city='';L.state='';L.zip=''}},
+  loanAmount:{label:'Loan amount',show:L=>money(num(L.loanAmount))},
+  age:{label:'Age',show:L=>{const a=ageOf(L);return isFinite(a)?String(a):''},set:(L,v)=>{L.age=v;L.ageOverride=true}},
+  dob:{label:'Date of birth',show:L=>fmtD(parseDate(L.dob))||L.dob||''},
+  spouseName:{label:"Spouse's name",sp:1},
+  spouseAge:{label:"Spouse's age",show:L=>{const a=spAgeOf(L);return isFinite(a)?String(a):''},set:(L,v)=>{L.spouseAge=v;L.spouseAgeOverride=true},sp:1},
+  spouseDob:{label:"Spouse's DOB",show:L=>fmtD(parseDate(L.spouseDob))||L.spouseDob||'',sp:1},
+  state:{label:'State',show:L=>stName(L.state)},
+  location:{label:'City / ZIP',show:L=>[L.city,L.zip].filter(has).join(' '),set:(L,v)=>{L.city=v;L.zip=''}},
+  amountRequested:{label:'Amount requested'}, beneficiary:{label:'Beneficiary'}, benRel:{label:'Relationship'},
+  hasLife:{label:'Has life insurance'}, heartStrokeCancer:{label:'Heart attack, stroke or cancer'}
+};
+const vshow=(k,L)=>VF[k].show?VF[k].show(L):(L[k]||'');
+const VLIST={mp:['firstName','phone','email','address','loanAmount','age','dob','spouseName','spouseAge','spouseDob'],
+  fe:['firstName','lastName','dob','age','phone','email','state','location','amountRequested','beneficiary','benRel','hasLife','heartStrokeCancer']};
+const vfList=L=>VLIST[isFE(L)?'fe':'mp'].filter(k=>!VF[k].sp||isMarried(L));
+const vCount=L=>{const ks=vfList(L);return [ks.filter(k=>L.v[k]).length,ks.length]};
+
+/* ---------- script building blocks ---------- */
+const say=(s,w,sm)=>({t:'say',s,w,sm}), cue=(s,l,w,cls)=>({t:'cue',s,l,w,cls}), note=(s,w)=>({t:'note',s,w}), sub=(s,w)=>({t:'sub',s,w});
+const ask=(n,q,f,w,c)=>({t:'ask',n,q,f,w,c}), vl=(s,w)=>({t:'vline',s,w}), calc=(fn,w)=>({t:'calc',fn,w});
+const qlist=(items,w)=>({t:'list',items,w}), act=(label,a,w,primary)=>({t:'act',label,a,w,primary}), fields=(f,w)=>({t:'fields',f,w});
+const rule=(s,w)=>cue(s,'Rule',w,'rule');
+const M=L=>isMarried(L), SGL=L=>!isMarried(L), notStay=L=>L.stayNow!=='yes';
+const DIALROW={t:'dialrow'};
+
+const BEST=[
+ {id:'b',tag:'B',title:'Be busy',blocks:[
+  calc(L=>{const d=S.stats.dials,a=S.stats.appts;return `<div class="busy"><div><b>${d}</b><span>dials this week · goal 500</span><div class="bar"><i style="width:${Math.min(100,d/5)}%"></i></div></div><div><b>${a}</b><span>appointments · goal 20</span><div class="bar"><i style="width:${Math.min(100,a*5)}%"></i></div></div><div><b>${L.dials||0}</b><span>dials to ${esc(L.firstName||'this lead')}</span></div></div>`}),
+  note(`Pick up the phone. This is a numbers game: the more dials, the more appointments, the more families you help. Most successful full-time agents make 500+ dials a week, or dial until they have 20+ appointments to submit $5,000+ APV weekly.`),
+  DIALROW
+ ]},
+ {id:'e1',tag:'E',title:"Establish the reason you're calling",blocks:[
+  cue(`They sent in a request asking for help. Now it's your turn to help them get the coverage they deserve.`,'Mindset'),
+  say(`"Hey, {{first}}."`), cue('Wait for response.'),
+  say(`"Hey, this is {{agent}}. I'm calling about your mortgage over at [[v:address]]. Looks like it's for [[v:loanAmount]]."`), cue('Pause and wait.'),
+  say(`"I was getting back to you about the form you responded to regarding the mortgage protection coverage that would help pay the mortgage for your family if something were to happen. I just needed to quickly verify the information you provided so we can get those options worked up for you."`),
+  say(`"You had put down that you're [[v:age]]. Is that correct? And when do you turn {{nextAge}}? When's your birthday?"`),
+  vl(`Birthday on the lead: [[v:dob]]`),
+  ask('',`Married, or a spouse on the loan?`,[{k:'married',t:'seg',o:[['yes','Married'],['no','Single']]},{k:'spouseName',l:"Spouse's name",w:M}]),
+  say(`"And I have {{spouse}}'s age as [[v:spouseAge]] and date of birth as [[v:spouseDob]]?"`,M),
+  cue('Start filling out the client qualification form (CQF) below.')
+ ]},
+ {id:'e2',tag:'E',title:"The why: who's counting on them",blocks:[
+  say(`"Now, one of the most common needs my clients have is that if something were to happen, their family would need to be able to keep paying bills, manage their life and kids, and take care of the mortgage. Is that how you feel?"`),
+  ask('',`"God forbid something were to happen to you, who would be financially responsible for the bills?"`,[{k:'beneficiary',l:'Name'},{k:'benRel',l:'Relationship'}],null,'Capture the name and relationship.'),
+  say(`"Would {{beneficiary}} be your beneficiary on this plan?"`),
+  ask('',`"Can I ask, did you guys just buy your home, or did you refinance it?"`,[{k:'purchaseType',t:'seg',o:[['bought','Just bought'],['refi','Refinanced']]}]),
+  qlist([`"Congratulations!"`,`"How do you like living there?"`,`"What made you choose that area?"`])
+ ]},
+ {id:'cqf',tag:'E',title:'Client qualification form (CQF)',blocks:[
+  say(`"I have a couple of quick questions so I can make sure I'm looking at the right companies for you."`),
+  ask(1,`"How's your health? Any medical issues?"`,[{k:'health',l:'{{first}}'}]),
+  ask(2,`"Have you used any nicotine or tobacco in the last 12 months? You don't plan on starting this weekend, do you?"`,[{k:'tobacco',t:'seg',o:YN,l:'{{first}}'},{k:'spouseTobacco',t:'seg',o:YN,l:'{{spouse}}',w:M}],null,'Get a laugh and put them at ease.'),
+  ask(3,`"What medications does your doctor have you on?"`,[{k:'meds',t:'area',l:'{{first}}'}]),
+  ask(4,`"Any hospital stays, ambulance rides or major surgeries for you in the past 10 years or so?"`,[{k:'hospital',l:'{{first}}'}]),
+  ask(5,`"And how about {{spouse}}? Anything for them?"`,[{k:'spouseHealth',l:'Medical issues'},{k:'spouseMeds',l:'Medications'}],M),
+  ask(6,`"Is there any history of things like high blood pressure, diabetes, cancer or heart attack for either of you?"`,[{k:'history',l:'History'}]),
+  ask(7,`"And then, just ballpark, what's your height and weight?"`,[{k:'hwA',l:'{{first}}',p:"5'10, 180"},{k:'hwB',l:'{{spouse}}',w:M},{k:'gender',t:'seg',o:[['Male','Male'],['Female','Female']],l:'{{first}} gender'}]),
+  ask(8,`"What do you do for work? Anything dangerous, like a stunt man or rodeo clown?"`,[{k:'occupation',l:'{{first}}'},{k:'spouseOccupation',l:'{{spouse}}',w:M}],null,'Get a laugh.'),
+  ask(9,`"And what does your work schedule typically look like? 9 to 5, Monday through Friday?"`,[{k:'schedule',l:'{{first}}'},{k:'spouseSchedule',l:'{{spouse}}',w:M}]),
+  ask(10,`"It says the amount of the mortgage to be paid off is [[v:loanAmount]]. Is that correct?"`,[]),
+  ask(11,`"And did you guys go with a 15 or a 30-year loan?"`,[{k:'loanTerm',t:'seg',o:[['15','15-year'],['30','30-year'],['other','Other']]}]),
+  ask(12,`"And what's the monthly payment on that?"`,[{k:'monthlyPayment',t:'money',l:'Monthly payment',cls:'sm'}]),
+  ask(13,`"Do you have children in the house?"`,[{k:'children',l:'How many, names'}]),
+  ask(14,`"Alright, perfect. And most importantly, when you responded to the form, what was the main concern for you? What specifically were you wanting the coverage to do for you?"`,[{k:'mainConcern',t:'area',l:'Main concern (the problem)'},{k:'goal',t:'area',l:'What they want it to accomplish (the solution)'}],null,'Write it in their words. You repeat it back at the appointment.'),
+  ask(15,`"Were you looking for coverage on just yourself, or for both you and {{spouse}}?"`,[{k:'coverageFor',t:'seg',o:[['self','Just me'],['both','Both of us']]}],M)
+ ]},
+ {id:'piv',tag:'S',title:'Pivot: present now or set the appointment',blocks:[
+  say(`"We've addressed a lot of things, and if you can stay with me, I can go over some options that will solve the issues we discussed. Does that work?"`),
+  say(`"Is this something you'd want to discuss with someone else before making a decision on protecting {{beneficiary}}?"`),
+  ask('',`Can they stay on now?`,[{k:'stayNow',t:'seg',o:[['yes','Yes, present now'],['no','No, set the appointment']]}],null,"If married and the spouse isn't on the line, set the appointment so both are there."),
+  act('Go to Step 2: the presentation →','go2',L=>L.stayNow==='yes',true),
+  say(`"I completely understand, I have a busy day too."`,L=>L.stayNow==='no',true)
+ ]},
+ {id:'set',tag:'S',title:'Set the appointment',w:notStay,blocks:[
+  say(`"Okay, that makes a lot of sense. I have enough information to start shopping your case across all the carriers. I'll need some time to do that, and then we'll just need to schedule a quick call to go over the options together, see what might make sense for you, and answer any questions you might have. Let me just pull up my calendar."`),
+  say(`"We've had a ton of these requests come in, so my schedule is pretty crazy right now."`), cue('Begin the funnel: two days, two timeframes, two times.','Funnel'),
+  calc(()=>`<div class="box"><b>Today</b> ${dayLabel(TODAY)} · <b>Tomorrow</b> ${dayLabel(addDays(1))} · <b>48-hour limit</b> ${dayLabel(addDays(2))}</div>`),
+  say(`"I have a couple of openings either today or tomorrow. Which of those would work best?"`), cue('Two days. Book within 48 hours; 24 is ideal.'),
+  ask('',`Day they picked`,[{k:'apptDay',t:'date',l:'Appointment date',cls:'sm'}]),
+  say(`"Okay. For {{apptDay}}, would earlier or later in the day work better?"`), cue('Two timeframes. Afternoon or evening? Before 5 pm or after 5 pm?'),
+  say(`"Okay. I have an opening at {{timeA}} or I can squeeze you in at {{timeB}}. Which of those would be better for you{{andSpouse}}?"`), cue('Two times. Change the default offer times in Settings.'),
+  ask('',`Time they picked`,[{k:'apptTime',l:'Appointment time',cls:'sm'}]),
+  say(`"It's very important that {{spouse}} is on the call, because if something happens, they're the one who's going to call me."`,M)
+ ]},
+ {id:'tie',tag:'T',title:'Tie down',w:notStay,blocks:[
+  say(`"Okay, and you're positive that time works for both you and {{spouse}} together, correct?"`,M), cue('No one-legged appointments. Find a time when both are available.',null,M),
+  say(`"Okay, grab a pen and paper and let me know when you're ready. I'm going to give you my information and a few things to have ready for our appointment."`),
+  say(`"Go ahead and write down my name. It's {{agent}}. Then write down 'Mortgage Protection.' And what time did we say again? Perfect. Go ahead and write that down as well. And just a couple things to have ready before our call: make sure you have your doctor's info and any medications you're on, just have those available."`),
+  say(`"And what's a good email for me to send the appointment confirmation to?"`), vl(`Email on the lead: [[v:email]]`),
+  say(`"Okay, I have us down for {{apptDay}} at {{apptTime}}. Sometimes the families I'm working with need a little extra time, so give me about a 15-minute window, just in case, and I'll make sure I give you the time you need as well. If I'm running more than 15 minutes behind, I'll make sure I let you know."`),
+  say(`"I really value our time and do my best to keep a tight schedule for everyone. If we aren't able to meet at {{apptTime}}, it will impact my ability to help another family during that time."`,null,true),
+  say(`"Have a great day and we'll talk to you on {{apptDay}} at {{apptTime}}."`),
+  act('Mark appointment set','markAppt',null,true)
+ ]}
+];
+
+const DELIV={
+ 'American Amicable':{s:`"Would you like your policy mailed or emailed to you?"`,n:'Mail delivery: 5–6 days.'},
+ 'Americo':{s:`"Would you like your policy mailed or emailed to you?"`,n:'Mail delivery: 5–6 days.'},
+ 'Corebridge/AIG':{s:`"Would you like your policy mailed or emailed to you?"`,n:'Mail delivery: 7–9 days.'},
+ 'F&G':{s:`"You will receive your policy in the mail in 6 to 9 days."`,n:'Indicate in the special instructions on the application to deliver to PI.'},
+ 'Foresters':{s:`"You'll receive your policy in your email shortly." Or by mail: "Your policy will be delivered in 5 to 7 days."`,n:''},
+ 'LGA':{s:`"You have the option of downloading the policy now, or you can follow the link they emailed you. It takes you to the policy owner portal, where you register and download your policy."`,n:''},
+ 'Mutual of Omaha':{s:`"You'll receive your policy in your email shortly, and a copy will also be mailed to you."`,n:'Mail delivery: 5–7 days.'},
+ 'SBLI':{s:`"You'll receive an email with a link to my.sbli.com to register your account and download your policy."`,n:''},
+ 'Transamerica':{s:`Fast Doc: "You'll receive your policy shortly by email." Non-Fast Doc: "You'll receive your policy in the mail."`,n:'Non-Fast Doc mail delivery: 6–9 days.'},
+ 'UHL':{s:`"You'll receive your policy in the mail."`,n:'Mail delivery: 5–7 days.'}
+};
+function optLabel(L,i){
+  const p=num(L.monthlyPayment);
+  if(L.program==='cp'){const m=num(L.monthsNeeded);if(!isFinite(m))return {t:`Option ${i}`,h:'Enter the months they need above'};
+    const mm=[Math.max(1,m-3),m,m+3][i-1];return {t:`${mm} months of payments`,h:isFinite(p)?`${money(mm*p)} benefit (${mm} × ${money(p)})`:'Add the monthly payment'};}
+  if(L.program==='full'||L.program==='partial'){const ten=p*.1;const lab=['Above 10%','At 10%','Below 10%'][i-1];
+    return {t:lab,h:isFinite(p)?['more than ','about ','less than '][i-1]+money2(Math.round(ten))+'/mo premium':'Add the monthly payment'};}
+  return {t:`Option ${i}`,h:'Pick a program first'};
+}
+const REAL=[
+ {id:'rap',tag:'R',title:'Rapport',blocks:[
+  cue(`Build rapport for a few minutes. Find common ground, but don't overdo it or become a "professional visitor." In the home, head to the kitchen table. Friendly, but in control.`),
+  qlist([`Compliment them on connecting to Zoom, if it fits.`,`New home or refinance? On the phone they said they {{purchase}}.`,`How long in the area? Moved from elsewhere?`,`Occupation: {{occupation}}. "How did you get started in that?"`,`Family: any family nearby?`])
+ ]},
+ {id:'tr',tag:'R',title:'Transition to the presentation',blocks:[
+  say(`"So, let me start off by showing you a few things about me."`), cue('Share your screen if virtual.'),
+  say(`"Here's my insurance license… driver's license and business card… picture of my family…"`), cue('This confirms your identity and purpose.'),
+  say(`"Let me show you, this is what you folks mailed in…"`), cue('Show the lead.'),
+  say(`"Which one of you responded? And I know we talked about this briefly on the phone with you, {{first}}, but now that we're all together, what was your main concern?"`), cue('This is their "surface why."'),
+  calc(L=>`<div class="box"><h4>On the phone they said</h4>${has(L.mainConcern)?esc(L.mainConcern):'<i>Nothing captured. Ask fresh.</i>'}${has(L.goal)?`<br><span style="color:var(--muted)">Wanted it to:</span> ${esc(L.goal)}`:''}</div>`),
+  say(`"So, what I'm hearing is {{concern}}. Is that right? Well, that makes sense for sure. And how long have you guys been thinking about this kind of protection?"`), cue('Repeat it back in your own words.')
+ ]},
+ {id:'mp',tag:'R',title:'What is mortgage protection?',blocks:[
+  say(`"OK, {{first}}, real quick let me explain what mortgage protection is. You probably already know, but it's a life insurance policy for homeowners that will pay off the mortgage or make mortgage payments while the family is in transition after someone dies. Mortgage protection can also be used to replace income if the breadwinner has a critical illness or disability in their working years."`),
+  say(`"Now, this is not the old kind of mortgage protection, meaning your lender will not be your beneficiary. So, who would your beneficiary be?"`),
+  fields([{k:'beneficiary',l:'Beneficiary',cls:'sm'},{k:'benRel',l:'Relationship',cls:'sm'}]), cue('Write this down.'),
+  say(`"So, {{beneficiary}} will receive the benefit. One of the other major differences is that this is not a decreasing term. In other words, if something happens to you tomorrow or 10 years from now, your death benefit will remain the same. This policy is also portable, so if you refinance or move, you can take this mortgage protection with you."`),
+  say(`"Now, some people do a full mortgage payoff if that's in the cards. Some do half. A lot of people just do a little bit, just a little bit to help their family with the transition to the next step, okay? It really depends on two things. First, it depends on budget; everyone's got a budget. And second, it depends on what you qualify for in terms of age and health. Make sense?"`),
+  cue('Wait for a response. Keep them accountable to your questions early; it carries through the whole presentation.'),
+  say(`"Now, it's important to know most people already have life insurance. It's really common. Some have it through work, some have their own policy, some have 401(k) money, maybe a rich uncle. I'm still waiting on mine. Some have money in the bank. In other words, we all work to build up a nest egg, right?"`),
+  say(`"That's why people get mortgage protection separately. They don't want their family to have to use the nest egg money to pay for the mortgage. They want that nest egg to go to the family, and they want the insurance company to pay off the mortgage debt. It's another way people use life insurance nowadays. Does that make sense?"`)
+ ]},
+ {id:'role',tag:'R',title:'Explain your role and purpose',blocks:[
+  say(`"My role in all of this is what they call a 'field underwriter.' Each week I work with 12 to 15 families in your area who have all requested this type of insurance. I have access to all the top-rated companies that offer this coverage, so I'm able to shop around for you. My job is to find you the best coverage you qualify for at the best price."`), cue('This eliminates the "I need to shop around" concern.'),
+  say(`"So, there are a few things we'll do today. I'm going to verify your health information. Some carriers are super picky about prescriptions and medical concerns, others are not, so I need to know the details so I can match you with the best company. I don't work for any one company. I work for you. So please be honest with me so I can help get your family protected. The good news is you don't have to see a nurse or give blood or urine with these programs."`), cue('Eases their mind about health issues and builds trust.'),
+  say(`"Then I have some detailed questions about your mortgage and your finances. Some of these might even be uncomfortable for me to ask, but I'm not doing this to be nosy. I'm doing it to make sure, in my professional opinion, that you have a need for this coverage. Not everyone has a need, and if that's the case with you, I'll let you know honestly and be on my way. We find most people need way less than they think, and if that's the case I can save you some money and be the hero."`), cue('Sets up Critical Period or partial payoff, and explains why you ask about finances.'),
+  say(`"Once we narrow this down to a few programs I think you'll qualify for, your job is to pick out the program that best suits your needs and your budget."`), cue('Gives them an active role in the process.'),
+  say(`"As we're talking, I'll be filling out some paperwork on my screen, and this is what we'll be submitting to the insurance company tonight to get their final approval, which could take two to seven days. Once they approve the application your family will be protected. It usually takes about 10 to 14 days to get the policy mailed to you, and then we'll get back on the phone or computer, go over everything together in detail, and make any changes if needed. Sound good?"`), cue('This gets your first "yes."')
+ ]},
+ {id:'hl',tag:'E',title:'Verify health',blocks:[
+  cue(`Health is the easiest place to start: you began it on the phone and it's less emotional. Finances come next and do the heavy lifting for creating the emotion.`,'Emotion'),
+  say(`"First, we need to verify the medical side to confirm which carriers you would qualify with."`), cue('Review the CQF from the phone call. Edit anything that changed.'),
+  fields([{k:'health',l:'{{first}}: medical issues'},{k:'meds',l:'{{first}}: medications'},{k:'hospital',l:'Hospital stays or surgeries, 10 yrs'},{k:'history',l:'High BP, diabetes, cancer, heart attack'},{k:'hwA',l:'{{first}}: height / weight'},{k:'tobacco',t:'seg',o:YN,l:'{{first}}: tobacco, 12 mo'},
+          {k:'spouseHealth',l:'{{spouse}}: medical issues',w:M},{k:'spouseMeds',l:'{{spouse}}: medications',w:M},{k:'hwB',l:'{{spouse}}: height / weight',w:M},{k:'spouseTobacco',t:'seg',o:YN,l:'{{spouse}}: tobacco, 12 mo',w:M}]),
+  say(`"I'm going to share my screen and run through a list of about 15 health questions. Some of these are going to sound crazy, but I have to ask them anyway. And if any are 'yes,' don't worry. I just need your full honesty like I mentioned earlier. So just really quickly, what medications are you prescribed…"`)
+ ]},
+ {id:'fif',tag:'E',title:'Financial information form (FIF)',blocks:[
+  cue('Required for every client. It also sets up future Preferred Client Services needs.'),
+  say(`"Okay, so now I want you guys to grab a pen and paper and let me know when you're ready."`), cue('Virtual: share a whiteboard or fill the FIF with them watching. Have them actively participate.'),
+  say(`"So that we can get a better picture of what cash flow would look like, we're going to do a quick financial review."`),
+  ask('',`"What do you do for a living, and what do those hours look like?"`,[{k:'occupation',l:'{{first}}'},{k:'schedule',l:'Hours'},{k:'spouseOccupation',l:'{{spouse}}',w:M},{k:'spouseSchedule',l:'Hours',w:M}]),
+  sub('Get the equity number'), cue('A critical step for any equity protection plan during the critical period.'),
+  say(`"So, your mortgage is about [[v:loanAmount]], right? Let's write that at the top of the page. And let me ask you: if you had the time to prep the home and put it on the market tomorrow, and didn't have to take a low offer, you were patient and got the full value, what would it sell for?"`),
+  fields([{k:'homeValue',t:'money',l:'What it would sell for',cls:'sm'}]),
+  calc(L=>{const e=num(L.homeValue)-num(L.loanAmount);return isFinite(e)?`<p class="say">"Okay, write that number next to what you owe. If we subtract what is owed from what it would sell for, we get <span class="tok">${money(e)}</span> in equity. Is that what you see as well?"</p>`:`<p class="cue"><span class="cl">Calc</span>Equity appears here once the sale value and loan amount are filled in.</p>`}),
+  cue('People should be proud of their equity. Congratulate them.'),
+  say(`"And that's today. Ten years from now it's thousands more; 15 or 20 years from now it can be hundreds of thousands more. As time goes by, what you owe goes down and what it's worth goes up. This equity is often the biggest part of the legacy left for a family. Does that make sense? Let's write the equity just below those numbers."`),
+  say(`"For most families, the number one job for mortgage protection is to make sure that equity stays with the family and never walks out your front door, right? That's your family's money, part of your nest egg. It should never go to the bank or to a low-ball investor buying your home as a distressed sale, right? So, at a minimum, we need to protect that equity. Do you see that?"`)
+ ]},
+ {id:'exp',tag:'E',title:'Quick budget',blocks:[
+  cue(`List the mortgage payment, major debts and major monthly expenses. Approximate numbers only; don't frustrate them with detail. This heads off "we need to check our budget."`),
+  ask('',`"Your monthly mortgage payment is {{payment}}, right?"`,[{k:'monthlyPayment',t:'money',l:'Monthly payment',cls:'sm'}]),
+  ask('',`"Roughly, if you had to estimate your utilities, groceries, car payment, cell phone, internet, all of your bills, what would that run you per month?"`,[{k:'otherBills',t:'money',l:'All other monthly bills',cls:'sm'}]),
+  ask('',`"And total debt: credit cards, revolving loans, student debt?"`,[{k:'debtTotal',t:'money',l:'Total debt balance',cls:'sm'}]),
+  ask('',`"Are we putting any money towards retirement?"`,[{k:'retirement',t:'money',l:'Monthly contribution',cls:'sm'}]),
+  calc(L=>{const o=(num(L.monthlyPayment)||0)+(num(L.otherBills)||0);return o?`<p class="say">"When we add this up, it looks like about <span class="tok">${money(o)}</span> comes out for the bills every month. Does that seem about right?"</p>`:''})
+ ]},
+ {id:'cash',tag:'E',title:'Uncover the cash flow problem',blocks:[
+  cue(`Cash flow is the problem we're solving. Helping them see the cash flow problem when someone passes creates the emotion.`),
+  say(`"Now, let's make two columns on the page. One for you, {{first}}, and one for you, {{spouse}}."`,M),
+  say(`"{{first}}, if you didn't come home last night, what is already in place that would pass on to {{spouse}} to help keep this house and this lifestyle, like other life insurance, savings, retirement accounts?"`,M),
+  say(`"{{first}}, if you didn't come home last night, what is already in place that would pass on to {{beneficiary}} to help with this house, like other life insurance, savings, retirement accounts?"`,SGL),
+  fields([{k:'inPlaceA',t:'area',l:'In place for {{first}}',cls:'wide'},{k:'lifeA',t:'money',l:'Life insurance amount',cls:'sm'},{k:'lifeAType',t:'seg',o:[['employer','Through work'],['personal','Personal'],['none','None']],l:'Type'}]),
+  say(`"And {{spouse}}, same questions for you: what's already in place today that would pass on to {{first}} to help keep the house and the lifestyle?"`,M),
+  fields([{k:'inPlaceB',t:'area',l:'In place for {{spouse}}',cls:'wide'},{k:'lifeB',t:'money',l:'Life insurance amount',cls:'sm'},{k:'lifeBType',t:'seg',o:[['employer','Through work'],['personal','Personal'],['none','None']],l:'Type'}],M),
+  say(`"Perfect. That usually covers the loss of about one year's income if you die while you're employed there. What do you have in the way of personal life insurance to protect your mortgage and family? Great, what's that coverage amount, and what's the monthly cost?"`,L=>L.lifeAType==='employer'||L.lifeBType==='employer'),
+  say(`"Okay, let's talk about income. {{first}}, what do you bring in on a monthly basis? And {{spouse}}?"`,M),
+  say(`"Okay, let's talk about income. {{first}}, what do you bring in on a monthly basis?"`,SGL),
+  fields([{k:'incomeA',t:'money',l:'{{first}} monthly',cls:'sm'},{k:'incomeB',t:'money',l:'{{spouse}} monthly',cls:'sm',w:M},{k:'otherIncome',t:'money',l:'Pensions, military, other',cls:'sm'}]),
+  say(`"Any pensions for either of you? Military benefits? Any other income?"`,null,true),
+  calc(L=>{const t=(num(L.incomeA)||0)+(num(L.incomeB)||0)+(num(L.otherIncome)||0);return t?`<p class="say">"So, it looks like approximately <span class="tok">${money(t)}</span> is coming into the house every month, correct?"</p><p class="cue"><span class="cl">Cue</span>Write down this total.</p>`:''}),
+  say(`"Now, if something happened to you first, {{first}}, how much money would stop coming into the house from your side every month? Would any income transfer over? Okay. And what about you, {{spouse}}, how much would stop coming in if something happened to you?"`,M),
+  fields([{k:'lossA',t:'money',l:'Stops if {{first}} passes',cls:'sm'},{k:'lossB',t:'money',l:'Stops if {{spouse}} passes',cls:'sm',w:M}]),
+  cue(`Leave blank to assume their full income stops. Social Security: if married, the surviving spouse keeps the higher of the two benefits and the other goes away. Ask if they understand how that works.`)
+ ]},
+ {id:'cfa',tag:'E',title:'Cash flow analysis',blocks:[
+  calc(L=>{
+    const iA=num(L.incomeA)||0,iB=isMarried(L)?(num(L.incomeB)||0):0,oI=num(L.otherIncome)||0,inc=iA+iB+oI;
+    const out=(num(L.monthlyPayment)||0)+(num(L.otherBills)||0);
+    if(!inc&&!out)return `<p class="cue"><span class="cl">Calc</span>Fill in income and the quick budget above and the math appears here.</p>`;
+    const lA=has(L.lossA)?num(L.lossA):iA,lB=has(L.lossB)?num(L.lossB):iB;
+    const a=inc-lA-out,b=inc-lB-out,f=L.firstName||'Client',s=L.spouseName||'Spouse',cls=n=>n<0?'neg':'pos';
+    let h=`<table class="cf"><tr><td>Combined monthly income</td><td>${money(inc)}</td></tr><tr><td>Approximate household expenses</td><td>${money(out)}</td></tr><tr class="total"><td>Extra each month today</td><td class="${cls(inc-out)}">${money(inc-out)}</td></tr></table>`;
+    h+=`<p class="say" style="margin-top:12px">"Based on the information you gave me, it looks like we have about <span class="tok">${money(inc-out)}</span> in extra income per month. Does that sound right to you?"</p>`;
+    if(isMarried(L))h+=`<p class="say">"Without ${esc(f)}'s income, it looks like you would be left, ${esc(s)}, with <span class="tok ${cls(a)}">${money(a)}</span>. And without ${esc(s)}'s income, it looks like you would be left, ${esc(f)}, with <span class="tok ${cls(b)}">${money(b)}</span>. Is that what you guys see?"</p>`;
+    else h+=`<p class="say">"Without your income, ${esc(f)}, it looks like ${esc(L.beneficiary||'your family')} would be left with <span class="tok ${cls(a)}">${money(a)}</span> a month. Is that what you see?"</p>`;
+    return h+`<p class="cue"><span class="cl">Cue</span>The cash flow problem should be obvious now. Take your time and let it sink in.</p>`;
+  }),
+  say(`"Okay, I can better understand now why you responded to the letter."`)
+ ]},
+ {id:'qq',tag:'E',title:'Quality questions',blocks:[
+  cue('Pick a few based on the situation, the program and your preference. Tick them off as you go.'),
+  qlist([`"How long would you want to stay in this house by yourself?"`,`"How long could you stay in this house?"`,`"Where would you want to go?"`,`"Who would have to move in with you?"`,`"Knowing this cash flow analysis, what specific challenges would you have?"`,`"What would you have to do to maintain the mortgage and your lifestyle?"`,`"What does that look like?"`,`"How do you feel about that, {{spouse}}?"`,`"What are your thoughts, {{spouse}}?"`,`"How long do houses take to sell around here?"`],M),
+  qlist([`"What would the kids do with this house?"`,`"Which of your kids would be making this mortgage payment?"`,`"Do they have a mortgage as well that they would need to also pay?"`,`"How hard would it be for your kids to make their own mortgage or rent and this one?"`,`"How long do houses take to sell around here?"`,`"Would all of the kids move in here together, or would one child most likely need to?"`,`"Would one child buy out the others?"`],SGL),
+  sub('Loss-of-income questions'),
+  qlist([`"{{first}}, if you passed away yesterday and your {{incomeA}} income was no longer coming into your household, how long would it take before life would become difficult for {{beneficiary}}? Would the kids need to change schools?"`,`"If something happened to you yesterday, how would {{beneficiary}} take care of themselves?"`,`"How would life need to change to make it work?"`,`"How long would {{beneficiary}} want to keep staying in this house if you were to pass away?"`,`"Can we agree that your family, like most families, would have some tough decisions to make with the loss of an income?"`]),
+  say(`"After looking at this, it makes sense. You're a lot like the families I meet with each week. We would be in a tough spot with the loss of an income. I completely understand why you reached out, and this is why I love my job. It allows me to provide peace of mind for responsible people."`)
+ ]},
+ {id:'tai',tag:'A',title:'The "think about it"',blocks:[
+  cue(`Assume they want the coverage. Price only matters in the absence of value. Sell on needs; use features and benefits to lock the sale down after it's made.`,'Assumption'),
+  calc(L=>{const r=road(L);return `<div class="box ${r.k?'good':'warn'}"><h4>Suggested road: ${esc(r.t)}</h4>${esc(r.why)}</div>`}),
+  say(`"Based on what you just shared with me, let's look at some programs. I'm going to include at least one that is our most comprehensive. I'm not doing that to talk you into spending more than you're comfortable with; I just want to show you all of your options. But I'm going to count on you to be honest about your budget. Sometimes homeowners will beat around the bush and say things like 'I need to think about it, sleep on it.' I've been doing this long enough to know what that means: the price isn't right. So, if what I'm showing you doesn't fit the budget, can I count on you to be honest with me? These are just some of the programs, and we'll definitely find you something tonight that fits comfortably inside your budget as a good starting place, OK?"`)
+ ]},
+ {id:'prog',tag:'A',title:'Explain programs',blocks:[
+  say(`"There are three ways to do mortgage protection."`),
+  sub('1 · Full payoff'),
+  cue('Explain full payoff, Living Benefits and ROP to clients 65 or under; ROP and disability riders have age restrictions. If you are going Critical Period, keep this short.'),
+  say(`"This will make sure the family keeps the home and pays the mortgage off in its entirety. It also provides Living Benefits for critical and chronic illness. If you get diagnosed with a critical illness like cancer, or have a heart attack, you can access the death benefit while you're alive, so you can recover without having to worry about the loss of work or your income. My clients see a lot of value in this feature."`,L=>!(ageOf(L)>65)),
+  say(`"Full coverage is generally the most expensive and hardest to qualify for. And 95% of the time I can find something more affordable for my clients over 65."`,L=>ageOf(L)>65),
+  sub('2 · Partial payoff'),
+  say(`"As we discussed earlier, this is great for families that have two people bringing in income, especially during their working years. Let's say one person can't work or dies. It's always helpful to have half the mortgage paid down, or a big chunk paid down, so it's affordable for the remaining person. For example, if something happens and I brought you a check for {{halfLoan}} even though your mortgage is {{loan}}, would you be mad at me? What could you do with that {{halfLoan}}?"`),
+  cue('Stop and get them to engage: pay down the loan, refinance for a lower payment, a down payment on a smaller place.'),
+  say(`"With your age and health, honestly, {{first}}, this one can also be hard to qualify for. For really anyone over 65. But it is a little cheaper than full payoff."`,L=>road(L).k==='cp'),
+  sub('3 · Critical period / equity protection'),
+  note(`Skip this option: {{first}} is under 65 with no health flags.`,L=>road(L).k==='full'),
+  say(`"Most of my clients around your age with similar health go for option three. It's the most affordable and the easiest to qualify for. It's called Critical Period Coverage, or Mortgage Payment Protection, because it covers the most critical period of time after the loss of a spouse or loved one, when the family is at most risk of losing the home. Let me explain."`,L=>road(L).k!=='full'),
+  cue('Start by talking to the person who would be in the most trouble if something happened to the breadwinner.',null,L=>road(L).k!=='full'),
+  say(`"If something were to happen to {{breadwinner}} tomorrow, does the bank come to {{survivor}} and ask for the full {{loan}} you owe? No, they just want what?"`,L=>road(L).k!=='full'),
+  cue('Stop. Get them to say the bank just wants the payment.',null,L=>road(L).k!=='full'),
+  say(`"People go into foreclosure not because the bank wants the payoff, but because the bank wants the payment. It would be nice if the bank called and said, 'We're so sorry for your loss, we're going to waive your payments for the next six months to a year,' but they don't do that, do they? They probably won't even know someone has died. They just want the payment."`,L=>road(L).k!=='full'),
+  say(`"What this program is going to do for you is buy you some time. Time to grieve properly, time to make a plan, and time to put the house on the market long enough to get top dollar for it, without your family having to come out of pocket for that mortgage payment each month. In my opinion, I wouldn't spend a bunch of money trying to pay off a house you don't plan on staying in anyway. Instead, the policy would cover mortgage payments long enough to sell it and get out the equity. That equity can become the benefit for {{beneficiary}}, the legacy for your family. Many times the equity in the home is the biggest asset a family has! Does that make sense?"`,L=>road(L).k!=='full'),
+  say(`"Of these three ways I just described, which one should we begin pricing?"`),
+  fields([{k:'program',t:'seg',o:[['full','Full payoff'],['partial','Partial payoff'],['cp','Critical period']],l:'They chose'}])
+ ]},
+ {id:'opt',tag:'A',title:'Show options',blocks:[
+  calc(L=>{const a=ageOf(L),sa=spAgeOf(L);const rows=[['State',stName(L.state)],['Age',isFinite(a)?a:''],['DOB',fmtD(parseDate(L.dob))],['Tobacco',({yes:'Yes',no:'No'})[L.tobacco]],['Height / weight',L.hwA],['Health',L.health],['Medications',L.meds],['History',L.history],['Loan',money(num(L.loanAmount))],['Payment',L.monthlyPayment?money(num(L.monthlyPayment))+'/mo':''],['Program',({full:'Full payoff',partial:'Partial payoff',cp:'Critical period'})[L.program]]];
+    if(isMarried(L))rows.splice(4,0,['Spouse',[L.spouseName,isFinite(sa)?'age '+sa:'',L.spouseTobacco==='yes'?'tobacco':''].filter(has).join(' · ')]);
+    return `<div class="box"><h4>Quote sheet</h4><dl class="kv">${rows.map(([k,v])=>`<dt>${k}</dt><dd${has(v)?'':' class="miss"'}>${has(v)?esc(v):'—'}</dd>`).join('')}</dl></div>`}),
+  fields([{k:'qpHealth',t:'seg',o:[['PP','PP · Preferred Plus'],['P','P · Preferred'],['R','R · Regular']],l:'Health class to quote'},{k:'qpNic',t:'seg',o:[['never','Never'],['currently','Currently'],['recently','Recently quit']],l:'Nicotine (from their tobacco answer)'},{k:'qpTerm',t:'seg',o:[['10','10'],['20','20'],['30','30']],l:'Term length (years)'}]),
+  calc(quoteToolHTML),
+  calc(L=>{const p=num(L.monthlyPayment);
+    if(L.program==='cp')return `<div class="box"><h4>Critical period</h4>Start with the number of months they give you, then show one shorter and one longer.${isFinite(p)?` Payment: <b>${money(p)}</b>/mo.`:''}</div>`;
+    if(L.program==='full'||L.program==='partial')return `<div class="box"><h4>10% rule</h4>${isFinite(p)?`10% of the ${money(p)} payment is <b>${money2(Math.round(p*.1))}/mo</b>. Prepare one option above, one at, and one below that.`:'Add the monthly payment to see the 10% anchor.'} Aim the middle option near $80–$100/mo; that's where the average premium lands.</div>`;
+    return `<p class="cue"><span class="cl">Cue</span>Pick the program they chose above to see the pricing anchors.</p>`}),
+  say(`"Knowing that most people will need at least a few months to grieve, how long do you think it would take you or your kids after that to make a plan, pack up, get the house ready to sell and allow time on the market for it to receive the highest offer?"`,L=>L.program==='cp'),
+  fields([{k:'monthsNeeded',t:'money',l:'Months they said',cls:'sm'}],L=>L.program==='cp'),
+  {t:'opts'},
+  cue(`Before showing numbers, answer the common questions up front: "Just so you know some more details of this program… this is a ____ (term/whole) life program… premiums won't increase… the death benefit won't decrease… the money is delivered in a lump sum to your beneficiary." Showcase free riders, level premiums, cash value.`,'Features')
+ ]},
+ {id:'close',tag:'A',title:'The close',blocks:[
+  say(`"Okay, now which one of these fits most comfortably inside your budget?"`), cue("Be quiet. Don't speak until they speak first. Once they pick, repeat it back so the decision is made."),
+  fields([{k:'chosen',t:'seg',o:[['1','Option 1'],['2','Option 2'],['3','Option 3']],l:'They picked'}]),
+  calc(L=>L.chosen?`<p class="say">"Great. So we're going with <span class="tok">${esc(chosenText(L))}</span>."</p>`:''),
+  say(`"Okay, from here I'm going to share my screen and finish filling out your paperwork. Go ahead and grab your driver's license for me. While you're doing that, what is the full name of your beneficiary?"`),
+  fields([{k:'benFull',l:'Beneficiary full legal name'}]),
+  act('Mark quoted (presented)','markQuoted')
+ ]},
+ {id:'app',tag:'A',title:'Application and policy delivery',blocks:[
+  cue('Move quickly to avoid decision remorse. Begin the application. Then set expectations on how and when they get the policy.'),
+  fields([{k:'carrier',t:'list',l:'Carrier',cls:'sm'}]),
+  calc(L=>writingHTML(L.carrier)),
+  calc(L=>{const d=DELIV[L.carrier];return d?`<p class="say">${esc(d.s)}</p>${d.n?`<p class="cue"><span class="cl">Note</span>${esc(d.n)}</p>`:''}`:''}),
+  act('Application submitted','markApp',null,true)
+ ]},
+ {id:'lock',tag:'L',title:'Lock it down: secure the sale',blocks:[
+  cue(`If you didn't make the sale, skip to the client survey.`),
+  say(`"One thing I take pride in is making the right recommendations to my clients and making sure you're satisfied with your program. I'd like you to tell me in your own words: what did we just do here today?"`),
+  calc(L=>`<div class="box"><h4>Prompts if they need help</h4><dl class="kv"><dt>Coverage</dt><dd${L.chosen?'':' class="miss"'}>${esc(chosenText(L)||'not picked yet')}</dd><dt>Program</dt><dd>${esc(({full:'Full payoff',partial:'Partial payoff',cp:'Critical period'})[L.program]||'—')}</dd><dt>What it's for</dt><dd>${esc(L.mainConcern||'—')}</dd><dt>Beneficiary</dt><dd>${esc(L.benFull||L.beneficiary||'—')}</dd><dt>Ask also</dt><dd style="font-weight:400">How soon the first payment drafts · Why we chose this program</dd></dl></div>`),
+  say(`"What questions do you have for me before I leave?"`),
+  say(`"The program we chose today, do you have peace of mind that this will help your family?"`),
+  say(`"Over the next ____ days or weeks, I'm going to work with the insurance company to get your policy approved. I'll be checking in with you every few days to let you know how things are going. When the policy is approved, we'll review it together. We'll also do an annual policy review with someone from our Member Services department."`),
+  say(`"Also, let's take a minute to save my number in your phone: {{agentPhone}}."`), cue('Having them save it means they recognize your number when you call.'),
+  say(`"Contact me anytime for anything. I'm your agent now. If anyone else calls you about life insurance, feel free to give them my number and have them call me. Our company may send you a few more letters in the mail; you can ignore those now that we have a program in place for you."`)
+ ]},
+ {id:'ref',tag:'L',title:'Referrals',blocks:[
+  cue('The 4 Rs after the sale: Rx card, Referral, Reset, Recruit.'),
+  say(`"Before I let you go, I wanted to let you know that billions of dollars in life insurance benefits go unclaimed each year. That happens when beneficiaries don't receive the death benefit after the insured person dies, often because they don't know about the policy or who issued it. So here's what I want for you: 4 or 5 names of people you love and have trusted over the past several years. I'll call them and let them know they're on my file for your policy, and make sure they have my information saved. These are the people who will help make sure your family gets the money. So go ahead with those 4 or 5 people. And please shoot them a message to let them know I'll be contacting them, so I'm not just some random person reaching out."`),
+  fields([{k:'referrals',t:'area',l:'Names and numbers',cls:'wide'}])
+ ]},
+ {id:'reset',tag:'L',title:'Reset',blocks:[
+  calc(L=>(has(L.debtTotal)||has(L.retirement))?`<div class="box">From the FIF: debt ${money(num(L.debtTotal))||'—'} · retirement ${money(num(L.retirement))||'—'}/mo</div>`:''),
+  say(`"We do a lot more than life insurance. We also have debt elimination plans where you can pay off your debt without spending any more monthly than you are now and build wealth. We can help you build your retirement, or help you protect a portion of your assets from market volatility. If your mortgage and other debts were paid off, would retirement be more comfortable?"`),
+  cue(`If they say none and they're fine right now, continue.`),
+  say(`"Do you feel like your debt is preventing you from contributing to your retirement?"`)
+ ]},
+ {id:'svy',tag:'L',title:'Client survey',blocks:[
+  cue('If they have assets or are still working, do this whether or not you made the sale.'),
+  say(`"Lastly, before I leave, given some of the information you gave me earlier, I just have a brief client survey to complete with you. Our Client Services department can help clients with several aspects of their overall financial plan, and I want to make sure we aren't missing anything before I leave."`),
+  cue('Work through the Client Survey sheet. Book a follow-up based on the answers.'),
+  fields([{k:'surveyNotes',t:'area',l:'Survey notes',cls:'wide'},{k:'followUp',l:'Follow-up booked for',cls:'sm'}])
+ ]}
+];
+
+/* ---------- final expense script ---------- */
+const opA=L=>op(L)==='A', opB=L=>op(L)==='B', br=v=>L=>L.agedBranch===v;
+const HQ=[['hqHeart','Heart attack, stroke, heart surgery or congestive heart failure'],['hqCancer','Cancer in the last 2–3 years'],['hqCopd','COPD, emphysema or oxygen use'],['hqDiab','Diabetes with insulin, neuropathy or amputation'],['hqKidney','Kidney failure or dialysis'],['hqHosp','Hospital stay, nursing home or home health care now'],['hqMemory',"Alzheimer's, dementia or memory issues"],['hqTerminal','Any terminal diagnosis']];
+const CAR_ALIAS={'corebridge/aig':'american general','corebridge':'american general','aig':'american general','f&g':'fidelity and guaranty','fidelity & guaranty':'fidelity and guaranty','uhl':'united home life','lga':'legal & general america','legal and general america':'legal & general america','banner life':'banner life','banner':'banner life','moo':'mutual of omaha','amam':'american amicable'};
+const carKey=c=>{const k=String(c||'').toLowerCase().replace(/\(.*?\)/g,'').replace(/\s+/g,' ').trim();return CAR_ALIAS[k]||k};
+function writingFor(c){if(!has(c))return [];const k=carKey(c);return (P().writing||[]).filter(w=>{const wk=carKey(w.carrier);return has(wk)&&(wk===k||wk.startsWith(k)||k.startsWith(wk))})}
+function writingHTML(c){if(!has(c))return '';const w=writingFor(c);
+  if(!w.length)return `<div class="box warn">No writing number for <b>${esc(c)}</b> in your Profile. Make sure you're appointed before you write it.</div>`;
+  return `<div class="box ${w.some(x=>x.status!=='Inactive')?'good':'warn'}">Your writing number with ${esc(c)}: ${w.map(x=>`<b class="num">${esc(x.num)}</b>${x.status&&x.status!=='Appointed'?` (${esc(x.status)})`:''}`).join(' · ')}${has(P().npn)?` · NPN <b class="num">${esc(P().npn)}</b>`:''}</div>`}
+const QP_KEYS=['first_name','last_name','name','email','phone','phone_preverified','state','coverage_amount','height_ft','height_in','weight','gender','dob','health','nicotine','nicotine_last_use','duration','results_modal_override','skip_confirmation'];
+const okUrl=u=>/^https:\/\/[^\s"'<>]+$/i.test(String(u||'').trim())?String(u).trim():'';
+function qpBase(L){const p=P();const own=okUrl(isFE(L)?p.qpFe:p.qpMp);if(own)return {u:own,fb:false};const fb=okUrl(p.qpMp)||okUrl(p.qpFe)||okUrl(p.quoteUrl);return {u:fb,fb:!!fb}}
+function hwParse(s){s=String(s||'');let ft=null,inch=null,wt=null,m=s.match(/([4-7])\s*(?:'|’|ft\.?|feet|foot)\s*(\d{1,2})?/i);
+  if(m){ft=+m[1];inch=+(m[2]||0)}else if(m=s.match(/\b([4-7])\s*[-\s,]\s*(\d{1,2})\b/)){ft=+m[1];inch=+m[2]}
+  if(inch!==null&&inch>11)inch=null;const w=[...s.matchAll(/\d{2,3}/g)].map(x=>+x[0]).find(n=>n>=80&&n<=600);if(w)wt=w;return {ft,inch,wt}}
+const nicOf=L=>L.qpNic||(L.tobacco==='yes'?'currently':L.tobacco==='no'?'never':'');
+const termOf=L=>L.qpTerm||(L.loanTerm==='30'?'30':L.loanTerm==='15'?'20':'');
+function qpCoverage(L){const ch=L.chosen?num(L['optCov'+L.chosen]):NaN;if(isFinite(ch))return ch;
+  if(isFE(L)){const o=num(L.optCov2);return isFinite(o)?o:num(L.amountRequested)}
+  if(L.program==='cp'){const m=num(L.monthsNeeded),pm=num(L.monthlyPayment);if(isFinite(m)&&isFinite(pm))return m*pm}
+  const loan=num(L.loanAmount);return L.program==='partial'?loan/2:loan}
+const isoD=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:'';
+function qpParams(L){const hw=hwParse(L.hwA),cov=qpCoverage(L);
+  const o={state:stAbbr(L.state),dob:isoD(parseDate(L.dob)),gender:/^m/i.test(L.gender||'')?'Male':/^f/i.test(L.gender||'')?'Female':'',
+    height_ft:hw.ft??'',height_in:hw.ft!==null&&hw.inch!==null?hw.inch:'',weight:hw.wt??'',nicotine:nicOf(L),health:L.qpHealth||'',
+    coverage_amount:isFinite(cov)&&cov>0?Math.round(cov):'',duration:isFE(L)?'':termOf(L),results_modal_override:'hide',skip_confirmation:'1'};
+  if(P().qpContact==='yes')Object.assign(o,{first_name:L.firstName||'',last_name:L.lastName||'',name:[L.firstName,L.lastName].filter(has).join(' '),email:L.email||'',phone:L.phone||''});
+  return o}
+function qpUrl(L){const b=qpBase(L).u;if(!b)return '';let u;try{u=new URL(b)}catch(e){return ''}QP_KEYS.forEach(k=>u.searchParams.delete(k));
+  Object.entries(qpParams(L)).forEach(([k,v])=>{if(has(v))u.searchParams.set(k,String(v))});return u.toString()}
+function quoteToolHTML(L){const b=qpBase(L);
+  if(!b.u)return `<div class="box warn"><h4>Quoteplicity</h4>Add your Quoteplicity quote links in <button type="button" class="linkbtn" data-act="view" data-v="profile" style="font-size:14px">Profile → Quoting</button> and an Open button shows up here, pre-filled with this lead.</div>`;
+  const o=qpParams(L),fe=isFE(L);
+  const rows=[['State',o.state],['Date of birth',o.dob?fmtD(parseDate(o.dob)):''],['Gender',o.gender],['Height',o.height_ft!==''?`${o.height_ft}′ ${o.height_in!==''?o.height_in:0}″`:''],['Weight',o.weight!==''?o.weight+' lb':''],['Nicotine',o.nicotine],['Health class',({PP:'PP · Preferred Plus',P:'P · Preferred',R:'R · Regular'})[o.health]||''],['Coverage',o.coverage_amount!==''?money(+o.coverage_amount):'']];
+  if(!fe)rows.push(['Term',o.duration?o.duration+' years':'']);
+  rows.push(['Name, email, phone',P().qpContact==='yes'?'Sent':'Not sent (turn on in Profile)']);
+  const miss=rows.filter(([,v])=>!has(v)).map(([k])=>k.toLowerCase());
+  return `<div class="box"><h4>Quoteplicity · pre-filled from this lead</h4><dl class="kv">${rows.map(([k,v])=>`<dt>${k}</dt><dd${has(v)?'':' class="miss"'}>${has(v)?esc(v):'not filled'}</dd>`).join('')}</dl>
+    ${miss.length?`<p class="fl" style="margin:8px 0 0">Missing ${esc(miss.join(', '))}. The quoter will ask for anything not filled.</p>`:''}
+    ${b.fb&&fe?`<p class="fl" style="margin:6px 0 0">Using your mortgage protection quote link. Add a Final Expense link in Profile → Quoting.</p>`:''}
+    <p class="fl" style="margin:6px 0 0">Medications and conditions don't pass through the link. Answer them in the quoter's health questions.</p>
+    <div class="acts" style="margin-top:8px"><a class="act primary" style="text-decoration:none;padding:6px 14px" href="${esc(qpUrl(L))}" target="_blank" rel="noopener">Open pre-filled quote ↗</a><button type="button" class="mini" data-act="copyQuote">Copy quote sheet</button></div></div>`}
+function complianceHTML(L){
+  const ab=stAbbr(L.state),lic=licensedList(),okSt=ab&&lic.includes(ab),t=clientTime(L.state),okT=t&&t.h>=8&&t.h<21,h=leadHours(L);
+  const row=(c,i,txt)=>`<div><i class="${c}">${i}</i><span>${txt}</span></div>`;
+  return `<div class="box ${okSt&&okT?'good':(!ab||!t?'warn':'bad')}"><div class="chk">
+   ${row(okSt?'y':(ab?'n':'q'),okSt?'✓':(ab?'✕':'?'),!lic.length?'Add your licensed states in Profile so this check can run.':ab?`${esc(stName(ab))}: ${okSt?`you are licensed here${licFor(ab)?` · license <b class="num">${esc(licFor(ab))}</b>`:''}`:'<b>not one of your licensed states</b>. Do not quote or write.'}`:'No state on the lead. Confirm it in the opener before quoting.')}
+   ${row(t?(okT?'y':'n'):'q',t?(okT?'✓':'✕'):'?',t?`Their local time is about <b>${esc(t.txt)}</b>. ${okT?'Inside the 8 a.m.–9 p.m. window.':'<b>Outside 8 a.m.–9 p.m.</b> Wait to call.'} <span style="color:var(--muted)">(main time zone for the state)</span>`:'Calling window: 8 a.m.–9 p.m. their local time.')}
+   ${row('y','•',`Lead is ${esc(ageText(L).toLowerCase())}${isFinite(h)?` → <b>Opener ${autoOpener(L)}</b> (${autoOpener(L)==='A'?'fresh, 0–72 hours: call within 5 minutes, then 3–5 attempts on day 1':'aged: 1–2 attempts a day, rotate times'})`:''}.`)}
+  </div></div>`;
+}
+const FE=[
+ {id:'pre',tag:'C',title:'Before you dial',blocks:[
+  calc(complianceHTML),
+  fields([{k:'opener',t:'seg',o:[['A','Opener A · fresh'],['B','Opener B · aged']],l:'Opener (auto-picked from the lead date)'},{k:'dncChecked',t:'seg',o:[['yes','Scrubbed'],['no','Not yet']],l:'National + internal DNC'}]),
+  rule(`Say your name, that you're a licensed agent, and the agency name. Never say or imply this is a government, state, Medicare or Social Security program, and never call it "free."`),
+  rule(`For aged leads, confirm with the vendor that the original consent covers you and how old it is. Honor any "stop calling me" immediately and log it.`,opB),
+  DIALROW
+ ]},
+ {id:'oa',tag:'O',title:'Opener A: fresh digital lead',w:opA,blocks:[
+  cue(`Speed wins. They just filled out the form, so you're returning their call, not cold calling. Fast, confident, "I'm getting back to you."`,'Posture'),
+  say(`"Hi, is this {{first}}? Hey {{first}}, this is {{agent}}, I'm a licensed insurance agent with {{agency}}. I'm getting back to you on the request you sent in {{when}} about final expense coverage, the plans that take care of burial and funeral costs. You remember filling that out?"`),
+  cue(`If you record, say it right after they confirm who they are.`,'Recording'),
+  say(`"Just so you know, this call may be recorded for quality."`,null,true),
+  fields([{k:'remembers',t:'seg',o:[['yes','Remembers'],['no',"Doesn't remember"]],l:'They…'}]),
+  say(`"No problem at all, it was a short form, probably on {{platform}}. It asked your age and who you'd want to take care of when you pass. You put down {{oneDetail}}. Ring a bell?"`,L=>L.remembers==='no'),
+  cue(`Use one real detail from the lead. Don't read their whole record back.`,null,L=>L.remembers==='no'),
+  sub('Confirm state and set the agenda'),
+  say(`"Perfect. And you're still in [[v:state]], right? Great. So here's how this works. I'm going to ask you a few questions, see exactly what you qualify for, and show you the prices. Takes about 15 minutes. If it makes sense, great. If not, no hard feelings. Fair enough?"`),
+  say(`"Do you have a pen and paper handy? I'm going to give you some numbers you'll want to write down."`),
+  cue(`The pen and paper keeps them engaged and signals this is a real appointment, not a pitch. Wait for them to get it.`)
+ ]},
+ {id:'ob',tag:'O',title:'Opener B: aged lead',w:opB,blocks:[
+  cue(`They've been called before and expect a pitch. Slow down, sound curious. Your only goal in the first minute is to find out if the need is still open.`,'Posture'),
+  say(`"Hi, is this {{first}}? {{first}}, this is {{agent}}, I'm a licensed agent with {{agency}}. This call may be recorded for quality. I'm following up on a request you put in a while back about burial insurance, and it looks like nobody ever finished helping you with it. Did you ever end up getting something in place?"`),
+  cue('Then stop talking. Let them answer.'),
+  fields([{k:'agedBranch',t:'seg',o:[['never','"No, I never did"'],['got','"Yes, I got something"'],['forgot',`"I don't remember asking"`]],l:'They said'}]),
+  say(`"Okay, you're not alone. A lot of folks start looking and then life gets busy. What was it that got you looking into it in the first place?"`,br('never')),
+  fields([{k:'why',t:'area',l:'Their why, in their words',cls:'wide'}],br('never')),
+  cue(`Their answer is your "why." Go to the shared core and skip the first rapport question.`,null,br('never')),
+  say(`"Good for you, that's the most important thing. Out of curiosity, who did you go with, and do you know if it pays the full amount from day one, or is there a waiting period?"`,br('got')),
+  fields([{k:'existingCarrier',l:'Who they went with',cls:'sm'},{k:'existingPays',t:'seg',o:[['wait','Waiting period / GI / not sure'],['dayone','Day-one, and happy']],l:'It pays'}],br('got')),
+  say(`"A lot of people get placed in a plan with a two- or three-year wait when their health would qualify them for day-one coverage. Would it be worth five minutes to see if you qualify for better? If not, you keep what you have."`,L=>L.agedBranch==='got'&&L.existingPays==='wait'),
+  say(`"Then you're in great shape. Would it be okay if I sent you my number in case anyone in the family ever needs help?"`,L=>L.agedBranch==='got'&&L.existingPays==='dayone'),
+  cue('Get the referral and end on good terms.',null,L=>L.agedBranch==='got'&&L.existingPays==='dayone'),
+  rule(`Never tell a client to cancel existing coverage. If you write a replacement, complete the state replacement forms and keep the old policy in force until the new one is approved.`,br('got')),
+  say(`"That's fair, it may have been a while. It was a short form about burial or final expense coverage, and it had your name and {{cityOrMonth}} on it. Is planning ahead for that something that's still on your mind, or should I take you off my list?"`,br('forgot')),
+  cue('If they want off, remove them and log it. No push.',null,br('forgot')),
+  act('They want off: mark Do not call','markDnc',br('forgot')),
+  sub('Re-verify before quoting'),
+  cue('Aged data goes stale. Confirm these before the fact-finder.'),
+  vl(`Current state (must be licensed): [[v:state]]`),
+  vl(`Date of birth: [[v:dob]] · age now [[v:age]] (it may have changed since the lead was sold)`),
+  fields([{k:'healthChanged',t:'seg',o:[['no','No change'],['yes','Health has changed']],l:'Health since they first inquired'}])
+ ]},
+ {id:'why',tag:'W',title:'Rapport and the "why"',blocks:[
+  cue(`People buy final expense for a person, not a policy. Find out who they're protecting before you ask a single health question.`),
+  calc(L=>has(L.hobby)&&String(L.hobby).trim().toLowerCase()!==fullName(L).toLowerCase()&&!/^none$/i.test(String(L.hobby).trim())?`<p class="cue"><span class="cl">Rapport</span><span>On the form, their favorite hobby is <b>${esc(String(L.hobby).trim())}</b>. Work it in.</span></p>`:''),
+  ask(1,`"Before I get to the insurance questions, tell me a little about you. Who's in the family?"`,[{k:'family',t:'area',l:'Family'}],null,null),
+  cue(`Aged lead who told you their why in the opener: skip this one.`,null,L=>op(L)==='B'&&L.agedBranch==='never'),
+  ask(2,`"If something happened to you tomorrow, who would be the one handling your arrangements?"`,[{k:'handler',l:'Who handles arrangements'}]),
+  ask(3,`"Have you ever had to bury a loved one? How was that paid for? Did they have coverage, or did the family have to come together?"`,[{k:'pastFuneral',t:'area',l:'Their story'}]),
+  ask(4,`"What made you want to look into this now?"`,[{k:'why',t:'area',l:'Their why'}]),
+  say(`"So if I'm hearing you right, the main thing is making sure {{beneficiary}} {{benIsnt}} stuck with the bill. Is that right?"`),
+  cue('Mirror it back before moving on.')
+ ]},
+ {id:'cost',tag:'W',title:'Cost education',blocks:[
+  say(`"Do you have an idea what a funeral costs today? The national median for a funeral with a viewing and burial is about $8,300, closer to $10,000 with a burial vault, and that's before the cemetery plot and headstone. A cremation with a viewing runs about $6,300. Do you see yourself being buried or cremated?"`),
+  fields([{k:'burialPref',t:'seg',o:[['burial','Burial'],['cremation','Cremation'],['unsure','Not sure']],l:'They see themselves'}]),
+  cue(`Figures are the National Funeral Directors Association's 2023 medians. Say "about," since local prices vary.`,'Source')
+ ]},
+ {id:'ff',tag:'F',title:'Fact-finder',blocks:[
+  ask(1,`"Let me confirm your full name and date of birth."`,[{t:'line',s:`On the lead: [[v:firstName]] [[v:lastName]] · born [[v:dob]] · age [[v:age]]`},{k:'gender',t:'seg',o:[['Male','Male'],['Female','Female']],l:'Gender'}],null,'Rate age and the application.'),
+  ask(2,`"About how tall are you, and what do you weigh?"`,[{k:'hwA',l:'Height / weight',cls:'sm',p:"5'10, 180"}],null,'Carrier build charts.'),
+  ask(3,`"Any tobacco or nicotine in the last 12 months, including vaping?"`,[{k:'tobacco',t:'seg',o:YN}],null,'Tobacco vs. non-tobacco rates.'),
+  ask(4,`"Who would you want this to go to? What's their full name and relationship to you?"`,[{t:'line',s:`On the form: [[v:beneficiary]] · [[v:benRel]]`},{k:'benFull',l:'Full name for the application'},{k:'benDob',l:'Their DOB (if the carrier asks)',cls:'sm'}],null,'Application, and it reinforces the why.'),
+  ask(5,`"Any life insurance now, through work or on your own? About how much?"`,[{t:'line',s:`On the form, has life insurance: [[v:hasLife]]`},{k:'lifeA',t:'money',l:'About how much',cls:'sm'},{k:'lifeAType',t:'seg',o:[['employer','Through work'],['personal','On their own'],['none','None']],l:'Type'}],null,'Gap amount and replacement check.'),
+  rule(`Replacing existing coverage requires the state replacement forms and must be in their interest. Tell them not to cancel the old policy until the new one is approved and in force.`,L=>L.lifeAType==='personal'),
+  ask(6,`"Is your income Social Security, pension or work? What day of the month does it hit?"`,[{k:'incomeSource',t:'seg',o:[['ss','Social Security'],['pension','Pension'],['work','Work'],['other','Other']]},{k:'payday',l:'Day it hits (e.g. 3 or 2nd Wednesday)',cls:'sm'}],null,'Set the draft date right after payday.'),
+  ask(7,`"If we found the right plan, what monthly amount could you set aside without it taking food off the table?"`,[{k:'budget',t:'money',l:'Monthly budget',cls:'sm'},{t:'line',s:`They asked for [[v:amountRequested]] on the form.`}],null,'Anchors the three options.')
+ ]},
+ {id:'hq',tag:'H',title:'Health questions',blocks:[
+  say(`"Now a few health questions. Just answer as accurately as you can. The insurance company checks prescription and medical records, and being accurate now is what makes sure your family gets paid later."`),
+  vl(`On the form, history of heart attack, stroke or cancer: [[v:heartStrokeCancer]]`),
+  calc(L=>/^y/i.test(L.heartStrokeCancer||'')?`<div class="box warn">They checked <b>yes</b> on the form. Ask which one, and when, as you go through the medications.</div>`:''),
+  say(`"Easiest way to do this: can you grab your medication bottles and read me the names? Don't worry about the doses."`),
+  fields([{k:'meds',t:'area',l:'Medications, and what each one is for',cls:'wide'}]),
+  cue(`The med list drives underwriting more than anything they tell you. For each medication, ask what it's for.`),
+  sub('Listen for these, then read the carrier\'s exact questions'),
+  {t:'hq'},
+  calc(L=>{const y=HQ.filter(([k])=>L[k]==='yes').length,a=HQ.filter(([k])=>has(L[k])).length;if(!a)return '';
+    return y?`<div class="box warn"><b>${y}</b> of ${HQ.length} flagged. Check carrier underwriting; use graded or guaranteed issue only if they won't qualify for level.</div>`:`<div class="box good">Nothing flagged so far${a<HQ.length?` (${HQ.length-a} not asked yet)`:''}. Look for a level, day-one plan.</div>`}),
+  rule(`Read health questions exactly as written on the carrier application. Never coach answers.`)
+ ]},
+ {id:'qt',tag:'Q',title:'Run the quote',blocks:[
+  say(`"Give me about two minutes while I check which companies will approve you at the best price. Stay right there."`),
+  cue(`Run it in Insurance Toolkits with state, age, build, tobacco and meds. Pick the carrier with the best rate that gives day-one (level) coverage. Use graded or guaranteed issue only when they won't qualify for level.`),
+  calc(L=>{const a=ageOf(L);const rows=[['State',stName(L.state)],['Age',isFinite(a)?a:''],['DOB',fmtD(parseDate(L.dob))],['Gender',L.gender],['Height / weight',L.hwA],['Tobacco',({yes:'Yes',no:'No'})[L.tobacco]],['Medications',L.meds],['Flags',HQ.filter(([k])=>L[k]==='yes').map(x=>x[1]).join('; ')||(HQ.some(([k])=>has(L[k]))?'None':'')],['Budget',money(num(L.budget))],['Requested',L.amountRequested]];
+    return `<div class="box"><h4>Quote sheet</h4><dl class="kv">${rows.map(([k,v])=>`<dt>${k}</dt><dd${has(v)?'':' class="miss"'}>${has(v)?esc(v):'—'}</dd>`).join('')}</dl><p style="margin:8px 0 0"><button type="button" class="mini" data-act="copyQuote">Copy quote sheet</button></p></div>`}),
+  fields([{k:'qpHealth',t:'seg',o:[['PP','PP · Preferred Plus'],['P','P · Preferred'],['R','R · Regular']],l:'Health class to quote'},{k:'qpNic',t:'seg',o:[['never','Never'],['currently','Currently'],['recently','Recently quit']],l:'Nicotine (from their tobacco answer)'}]),
+  calc(quoteToolHTML),
+  fields([{k:'carrier',t:'list',l:'Carrier',cls:'sm'},{k:'planType',t:'seg',o:[['level','Level (day one)'],['graded','Graded'],['gi','Guaranteed issue']],l:'Plan'},{k:'waitYears',l:'Waiting period (years)',cls:'sm',w:L=>L.planType==='graded'||L.planType==='gi'},{k:'amBest',l:'A.M. Best rating',cls:'sm'},{k:'carrierYears',l:'Years paying claims',cls:'sm'}]),
+  calc(L=>writingHTML(L.carrier))
+ ]},
+ {id:'pc',tag:'P',title:'Presentation and three-option close',blocks:[
+  cue(`Good news first, then three prices, then ask which one fits. Never ask "do you want it?" Ask "which one?"`),
+  sub('Good news'),
+  say(`"Okay {{first}}, I've got good news. Based on what you told me, you qualify with {{carrier}}, a company rated {{amBest}} that's been paying claims for over {{years}} years. Your plan is {{planLine}}."`),
+  sub('How the plan works (keep it to four points)'),
+  say(`"Here's how it works. One: your price is locked in and will never go up. Two: your coverage never goes down. Three: it never expires as long as premiums are paid, whether you live to 85 or 105. Four: it pays straight to {{beneficiary}}, usually within a few days of the paperwork, so they can take care of everything without going into their own pocket."`),
+  cue(`Confirm each feature against the carrier's product before you say it. Not every plan has every feature.`),
+  sub('Three options'),
+  calc(L=>{const b=num(L.budget);return `<div class="box">Have them write the three numbers down. Top option at or slightly above budget, middle at budget, bottom below.${isFinite(b)?` Budget: <b>${money(b)}/mo</b>.`:''}${has(L.amountRequested)?` They asked for <b>${esc(L.amountRequested)}</b>.`:''}</div>`}),
+  {t:'feopts'},
+  say(`"Get that pen ready. I'm going to give you three options."`),
+  say(`"Option one is our Gold plan: {{feCov1}} in coverage for {{fePrem1}} a month. That covers a full funeral and leaves extra for {{beneficiary}} for bills and the headstone."`),
+  say(`"Option two is Silver: {{feCov2}} for {{fePrem2}} a month. That covers a traditional funeral and burial."`),
+  say(`"Option three is Bronze: {{feCov3}} for {{fePrem3}} a month. That covers a basic service or cremation."`),
+  say(`"Which of those three fits best for you and your family?"`),
+  cue(`Then be quiet. Whoever talks first loses. If they pick one, go straight to the application. If they hesitate, use the objection handlers on the lead card.`),
+  fields([{k:'chosen',t:'seg',o:[['1','Gold'],['2','Silver'],['3','Bronze']],l:'They picked'}]),
+  act('Mark quoted','markQuoted'),
+  sub('If the budget is tight'),
+  say(`"I hear you. Let's not let the price keep you from having something in place. What if we did {{lowerAmt}} for {{lowerPrem}}? Would that work better?"`),
+  fields([{k:'lowerAmt',t:'money',l:'Lower amount',cls:'sm'},{k:'lowerPrem',t:'money',l:'Premium / mo',cls:'sm'}]),
+  cue(`Something in force beats nothing in force. You can increase coverage later.`)
+ ]},
+ {id:'ap',tag:'A',title:'Application and bank draft',blocks:[
+  cue(`Move straight into the application in a calm, matter-of-fact tone. Hesitation from you creates hesitation from them.`),
+  say(`"Great choice. Let's get you protected today. I'll fill out the application with you now, and the company will give us a decision, usually today or within a few days."`),
+  qlist([`Read every health question exactly as written on the carrier application.`,`Confirm beneficiary full name ({{benFull}}), relationship, and date of birth if the carrier asks.`,`Confirm mailing address and best phone number.`]),
+  fields([{k:'address',l:'Mailing address',cls:'wide'},{k:'city',l:'City',cls:'sm'},{k:'zip',l:'ZIP',cls:'sm'}]),
+  vl(`Best phone: [[v:phone]]`),
+  sub('Bank draft'),
+  say(`"Most of my clients like to set the payment for right after their Social Security comes in, so it never gets in the way. You said yours comes on the {{payday}}. Should we set it for the {{draftDay}}?"`),
+  fields([{k:'draftDate',l:'Draft day agreed',cls:'sm'}]),
+  say(`"The company drafts it straight from your account, same as your other bills. What's the name of your bank? … And can you grab a check or your bank card app? I'll need the routing and account number."`),
+  calc(L=>writingHTML(L.carrier)),
+  rule(`Enter bank details only in the carrier's secure application. Don't type them anywhere in this desk. If they hesitate, use the "bank info" handler on the lead card.`),
+  act('Application submitted','markApp',null,true)
+ ]},
+ {id:'li',tag:'L',title:'Lock-in and referral',blocks:[
+  cue('Do this before you hang up.'),
+  say(`"Congratulations, {{first}}, you've done something most people never get around to. Let me tell you what happens next."`),
+  qlist([`"The company may call you for a short phone interview. Answer the same way you did with me."`,`"Your policy will come in the mail in about 2 to 3 weeks. Put it somewhere your family can find it."`,`"You have a free-look period, usually 10 to 30 days depending on your state, to review it."`,`"Please let {{beneficiary}} know you did this and where the policy is. Would you like me to send them my number too?"`,`"Save my number: {{agentPhone}}. If anyone ever calls about changing your coverage, will you call me first before you make any decision?" Wait for the yes.`]),
+  sub('Referral ask'),
+  say(`"One last thing. Who else in your family or church would want the same peace of mind? I'll treat them exactly the way I treated you."`),
+  fields([{k:'referrals',t:'area',l:'Referrals: names and numbers',cls:'wide'}]),
+  cue(`Log the sale, draft date and follow-up in the lead card before the next dial.`)
+ ]}
+];
+
+const OBJ=[
+ [`"I need to think about it."`,`Price, trust, or one detail they didn't follow`,`"That's fair, it's an important decision. Usually when someone says that, it's either the price or something I didn't explain well. Which one is it for you?"`],
+ [`"It's too expensive."`,`Wrong coverage amount for the budget`,`"I understand. Let's find a number that works. If you could only do one thing for {{beneficiary}}, what monthly amount would feel comfortable?" Drop to Bronze or lower.`],
+ [`"I need to talk to my kids / spouse."`,`Wants approval, or using it as an exit`,`"I respect that. Can I ask, if they said 'go ahead,' would you want to do it? … Then let's get them on the phone now, or set a time tonight when all three of us can talk for ten minutes."`],
+ [`"Just mail me something."`,`Polite brush-off`,`"I can, but the prices I showed you are based on your health today, and nothing gets locked in by mail. What specifically would you want to see on paper? I can answer it right now."`],
+ [`"I already have coverage."`,`May have a waiting period or too little coverage`,`"Good. Do you know how much it is and whether it pays in full from day one? A lot of people find out their family only gets their premiums back in the first two years." Follow the replacement rules.`],
+ [`"I'm not giving my bank info over the phone."`,`Fear of scams`,`"I completely understand, and you should be careful. The payment goes directly to {{carrier}}, not to me, and nothing is drafted until you're approved. You can call {{carrier}} at the number on their website to verify I'm appointed with them. Would that help?"`],
+ [`"I'm on a fixed income."`,`Real budget limit`,`"Most of my clients are too, and that's exactly why they do this. They don't want their family coming out of pocket on a fixed income either. Let's find the amount that fits."`],
+ [`"Call me back later."`,`Bad timing or brush-off`,`"No problem. Is tonight at {{timeA}} or tomorrow at {{timeB}} better?" Book a specific time. Never leave it open.`],
+ [`"How did you get my number?"`,`Doesn't remember the request (aged)`,`"You filled out a request about burial coverage a while back, and it had your name and {{cityOrMonth}} on it. If it's not something you want help with anymore, I'll take you off my list right now."`],
+ [`"Is this a scam?"`,`Has been burned before`,`"I'm glad you asked. My name is {{agent}}, and I'm licensed in {{state}}. You can look me up on the {{state}} Department of Insurance website right now. I'll wait."`,`Have ready: {{state}} license {{licNum}} · NPN {{npn}}`]
+];
+const TPL={
+ A:[['Voicemail',`Hi {{first}}, this is {{agent}}, licensed agent with {{agency}}, getting back to you on the final expense request you just sent in. I have your information pulled up. Call me back at {{agentPhone}}. Again, that's {{agentPhone}}. Talk soon.`],
+    ['Text · right after first missed call',`Hi {{first}}, this is {{agent}}, licensed agent with {{agency}}. I just tried calling about the final expense request you sent. Is now a good time, or is later today better? Reply STOP to opt out.`],
+    ['Text · day 1 evening',`{{first}}, I have your quote options ready. Takes about 15 minutes. What time works tomorrow?`],
+    ['Text · day 3',`Still want to see your options for burial coverage? I can call whenever works for you.`],
+    ['Text · day 7',`I'll close out your request for now. If you'd still like to see your prices, just reply YES and I'll call you.`]],
+ B:[['Voicemail',`Hi {{first}}, {{agent}} with {{agency}}. I'm following up on the burial coverage request you sent in a while back. I just have one quick question for you. Give me a call at {{agentPhone}}. That's {{agentPhone}}.`],
+    ['Text · day 1',`Hi {{first}}, this is {{agent}} with {{agency}}. A while back you asked about burial insurance. Did you ever get something in place? Reply STOP to opt out.`],
+    ['Text · day 3',`Just checking back, {{first}}. A lot of folks I talk to got placed in a plan with a 2-year wait when they qualified for day-one coverage. Happy to take a look at yours, no obligation.`],
+    ['Text · day 10',`Last note from me. If you ever want help with burial coverage for you or your family, I'm at {{agentPhone}}.`]]
+};
+
+/* ---------- rendering ---------- */
+let WH=[],CA=[];
+const reg=(arr,fn)=>{arr.push(fn);return arr.length-1};
+const wAttr=w=>w?` data-when="${reg(WH,w)}"`:'';
+function fill(s){return esc(s).replace(/\{\{(\w+)\}\}/g,(m,k)=>`<span class="tok" data-tok="${k}"></span>`).replace(/\[\[v:(\w+)\]\]/g,(m,k)=>`<span class="vchip" data-vf="${k}"><span class="vval"></span><button type="button" class="vbtn vok" data-act="vok" data-k="${k}" title="Mark verified" aria-label="Mark verified">✓</button><button type="button" class="vbtn" data-act="vedit" data-k="${k}">Fix</button></span>`)}
+function fieldHTML(f){
+  const w=wAttr(f.w), lab=f.l?`<span class="fl">${fill(f.l)}</span>`:'', id='f-'+(f.k||'x')+'-'+uid();
+  if(f.t==='line')return `<p class="vline"${w}>${fill(f.s)}</p>`;
+  if(f.t==='seg')return `<div class="fld${f.cls?' '+f.cls:''}"${w}>${lab}<div class="seg${f.o===YN?' yn':''}" data-cf="${f.k}">${f.o.map(([v,t])=>`<button type="button" data-act="pick" data-f="${f.k}" data-v="${esc(v)}">${esc(t)}</button>`).join('')}</div></div>`;
+  let ctl;
+  if(f.t==='area')ctl=`<textarea class="fin" id="${id}" data-f="${f.k}" rows="2"></textarea>`;
+  else if(f.t==='select')ctl=`<select class="fin" id="${id}" data-f="${f.k}">${f.o.map(([v,t])=>`<option value="${esc(v)}">${esc(t)}</option>`).join('')}</select>`;
+  else ctl=`<input class="fin" id="${id}" data-f="${f.k}" ${f.t==='date'?'type="date"':f.t==='dt'?'type="datetime-local"':'type="text"'}${f.t==='money'?' inputmode="decimal"':''}${f.t==='list'?' list="carrierList"':''}${f.p?` placeholder="${esc(f.p)}"`:''} autocomplete="off">`;
+  return `<label class="fld${f.cls?' '+f.cls:(f.t==='area'?' wide':'')}" for="${id}"${w}>${lab}${ctl}</label>`;
+}
+function blockHTML(b){
+  const w=wAttr(b.w);
+  switch(b.t){
+    case 'say':return `<p class="say${b.sm?' sm':''}"${w}>${fill(b.s)}</p>`;
+    case 'cue':return `<p class="cue${b.cls?' '+b.cls:''}"${w}><span class="cl">${esc(b.l||'Cue')}</span><span>${fill(b.s)}</span></p>`;
+    case 'note':return `<p class="note"${w}>${fill(b.s)}</p>`;
+    case 'sub':return `<h4 class="sub"${w}>${esc(b.s)}</h4>`;
+    case 'vline':return `<p class="vline"${w}>${fill(b.s)}</p>`;
+    case 'calc':return `<div class="calc" data-calc="${reg(CA,b.fn)}"${w}></div>`;
+    case 'act':return `<button type="button" class="act${b.primary?' primary':''}" data-act="${b.a}"${w}>${fill(b.label)}</button>`;
+    case 'fields':return `<div class="ff"${w}>${b.f.map(fieldHTML).join('')}</div>`;
+    case 'list':return `<ul class="qq"${w}>${b.items.map(it=>`<li><label><input type="checkbox"><span>${fill(it)}</span></label></li>`).join('')}</ul>`;
+    case 'ask':return `<div class="ask"${w}><span class="ask-n">${b.n||'·'}</span><div class="ask-body"><p class="ask-q">${fill(b.q)}</p>${b.f.length?`<div class="ff">${b.f.map(fieldHTML).join('')}</div>`:''}${b.c?`<p class="cue"><span class="cl">Why</span><span>${fill(b.c)}</span></p>`:''}</div></div>`;
+    case 'dialrow':return `<div class="dialrow"><span class="fl">Log this attempt</span><div class="seg"><button type="button" data-act="dial" data-o="na">No answer</button><button type="button" data-act="dial" data-o="vm">Left voicemail</button><button type="button" data-act="dial" data-o="text">Sent text</button><button type="button" data-act="dial" data-o="talk">Talked</button></div></div>`;
+    case 'hq':return HQ.map(([k,l])=>`<div class="hq"><span>${esc(l)}</span>${fieldHTML({k,t:'seg',o:YN})}</div>`).join('');
+    case 'opts':return [1,2,3].map(i=>`<div class="optrow"><div class="optlab" data-calc="${reg(CA,L=>{const o=optLabel(L,i);return `<b>Option ${i} · ${esc(o.t)}</b><span>${esc(o.h)}</span>`})}"></div>${fieldHTML({k:'optCov'+i,t:'money',l:'Coverage'})}${fieldHTML({k:'optPrem'+i,t:'money',l:'Premium / mo'})}</div>`).join('');
+    case 'feopts':return [1,2,3].map(i=>`<div class="optrow"><div class="optlab"><b>${FE_TIER[i-1]}</b><span>${['Full funeral plus extra','Traditional funeral and burial','Basic service or cremation'][i-1]}</span></div>${fieldHTML({k:'optCov'+i,t:'money',l:'Coverage',p:['25,000','15,000','10,000'][i-1]})}${fieldHTML({k:'optPrem'+i,t:'money',l:'Premium / mo'})}</div>`).join('');
+  }
+  return '';
+}
+function renderSteps(L){
+  const el=$('#steps');
+  if(L&&isFE(L)){const o=op(L);el.innerHTML=`<button type="button" data-act="opener" data-v="A" class="${o==='A'?'on':''}"><b>A</b>Fresh lead</button><button type="button" data-act="opener" data-v="B" class="${o==='B'?'on':''}"><b>B</b>Aged lead</button>`;el.setAttribute('aria-label','Final expense opener')}
+  else {const s=L?L.step:1;el.innerHTML=`<button type="button" data-act="step" data-step="1" class="${s!==2?'on':''}"><b>1</b>Set appointment · B.E.S.T.</button><button type="button" data-act="step" data-step="2" class="${s===2?'on':''}"><b>2</b>Presentation · R.E.A.L.</button>`;el.setAttribute('aria-label','Script step')}
+  el.hidden=S.view!=='dialer';
+}
+function renderScript(){
+  WH=[];CA=[];
+  const L=cur(),el=$('#script');
+  if(!L){el.innerHTML=`<div class="empty"><h2>No lead selected</h2><p>Import your spreadsheet or add a lead to start dialing.</p><p><button type="button" class="tbtn primary" data-act="openImport">Import spreadsheet</button></p></div>`;return}
+  const fe=isFE(L), two=!fe&&L.step===2, secs=fe?FE:(two?REAL:BEST);
+  el.classList.toggle('is-fe',fe);
+  const acro=fe?[['C','Compliance'],['O','Opener'],['W','Why'],['F','Fact-finder'],['H','Health'],['Q','Quote'],['P','Close'],['A','Application'],['L','Lock-in']]:two?[['R','Rapport'],['E','Emotion'],['A','Assumption'],['L','Lock it down']]:[['B','Be busy'],['E','Establish the reason'],['S','Set appointment'],['T','Tie down']];
+  const eyebrow=fe?`Final expense · one call · ${esc(ageText(L))}`:`Step ${two?2:1} of 2 · ${two?'Appointment':'Phone call'}`;
+  const h=fe?'Final expense call':(two?'The presentation':'Set the appointment');
+  const loc=fe?[L.city,stName(L.state)].filter(has).join(', '):fullAddr(L);
+  el.innerHTML=`<div class="sh"><span class="eyebrow">${eyebrow}</span><h2>${h}</h2>
+    <div class="meta"><span><b>${esc(fullName(L))}</b>${!fe&&isMarried(L)&&L.spouseName?' &amp; '+esc(L.spouseName):''}</span>${L.phone?`<span class="num">${esc(L.phone)}</span>`:''}${loc?`<span>${esc(loc)}</span>`:''}<span class="pill ${L.status}" data-hdr="stage">${STATUS_L[L.status]}</span></div>
+    <div class="acro">${acro.map(([a,t])=>`<span><b>${a}</b>${t}</span>`).join('')}</div></div>
+    <nav class="outline" aria-label="Sections">${secs.map(s=>`<button type="button" data-act="jump" data-sec="${s.id}"${wAttr(s.w)}><b>${s.tag}</b>${esc(s.title)}</button>`).join('')}</nav>
+    ${secs.map(s=>`<section class="sec" id="sec-${s.id}"${wAttr(s.w)}><div class="sec-h"><span class="letter">${s.tag}</span><h3>${esc(s.title)}</h3></div><div class="blocks">${s.blocks.map(blockHTML).join('')}</div></section>`).join('')}
+    ${fe||two?'':`<div class="sec"><div class="blocks"><p class="cue"><span class="cl">Next</span>Appointment day? Switch to Step 2 at the top, or here.</p><button type="button" class="act" data-act="go2">Open Step 2: the presentation →</button></div></div>`}`;
+}
+function subLine(L){return isFE(L)?[stAbbr(L.state)||L.state,L.city,has(L.amountRequested)?L.amountRequested+' req.':''].filter(has).join(' · '):[L.city,money(num(L.loanAmount))].filter(has).join(' · ')}
+function renderList(){
+  const q=$('#q').value.trim().toLowerCase(), f=$('#filt').value, tf=$('#tfilt').value;
+  const rows=S.leads.filter(L=>(!f||L.status===f)&&(!tf||L.type===tf)&&(!q||[fullName(L),L.phone,L.city,L.address,L.spouseName,L.email].join(' ').toLowerCase().includes(q)));
+  $('#list').innerHTML=rows.length?rows.map(L=>{const [a,b]=vCount(L);return `<button type="button" class="lead${L.id===S.active?' on':''}" data-act="pick-lead" data-id="${L.id}">
+    <span class="nm"><span class="ty ${L.type}">${L.type==='fe'?'FE':'MP'}</span>${esc(fullName(L))}${L.sample?'<span class="tag">Sample</span>':''}</span><span class="pill ${L.status}">${STATUS_L[L.status]}</span>
+    <span class="sub">${esc(subLine(L)||L.phone||'—')}</span><span class="vm" title="Fields verified">${a}/${b} ✓</span></button>`}).join(''):`<p class="pad" style="color:var(--muted);font-size:13px;margin:0">${S.leads.length?'No leads match.':'No leads yet. Import your spreadsheet to get started.'}</p>`;
+  const samples=S.leads.some(l=>l.sample);
+  $('#lfoot').innerHTML=`<span>${S.leads.length} lead${S.leads.length===1?'':'s'} · saved in this browser</span>${samples?`<button type="button" class="linkbtn" data-act="clearSamples">Remove the sample leads</button>`:''}`;
+}
+const LEAD_FIELDS=[['firstName','First name'],['lastName','Last name'],['phone','Phone'],['email','Email'],['address','Street address'],['city','City'],['state','State'],['zip','ZIP'],['dob','Date of birth'],['age','Age'],['gender','Gender'],['loanAmount','Loan amount'],['lender','Lender'],['spouseName',"Spouse's name"],['spouseDob',"Spouse's DOB"],['spouseAge',"Spouse's age"],['amountRequested','Amount requested'],['beneficiary','Beneficiary'],['benRel','Beneficiary relationship'],['hasLife','Has life insurance'],['heartStrokeCancer','Heart attack / stroke / cancer'],['hobby','Favorite hobby'],['leadSource','Lead source'],['ad','Ad'],['platform','Platform'],['leadDate','Lead date'],['interestedIn','Interested in']];
+const FE_ONLY=['amountRequested','hasLife','heartStrokeCancer','hobby','ad','platform','interestedIn','gender'], MP_ONLY=['loanAmount','lender','spouseName','spouseDob','spouseAge'];
+let delArmed=false;
+function renderCard(){
+  const L=cur(),el=$('#card');
+  if(!L){el.innerHTML=`<div class="pad" style="color:var(--muted)">Pick a lead to see its card.</div>`;return}
+  const fe=isFE(L),extra=Object.entries(L.extra||{});
+  const lf=LEAD_FIELDS.filter(([k])=>fe?!MP_ONLY.includes(k):!FE_ONLY.includes(k));
+  const tpls=fe?TPL[op(L)]:null;
+  el.innerHTML=`<div class="card-h"><span class="eyebrow">Lead card${L.sample?' · sample':''}</span><h2 data-card="name"></h2>
+    <div class="phone">${L.phone?`<span class="num">${esc(L.phone)}</span><button type="button" class="mini" data-act="copy" data-copy="${esc(L.phone)}">Copy</button>`:'<span style="color:var(--warn);font-size:13px">No phone on file</span>'}<span style="font-size:12px;color:var(--muted)" data-card="dials"></span></div>
+    ${fieldHTML({k:'type',t:'seg',o:[['mp','Mortgage protection'],['fe','Final expense']],l:'Lead type'})}
+    <div><span class="fl">Stage</span><div class="stepper" data-card="stepper" style="margin-top:4px"></div></div>
+    ${blockHTML(DIALROW)}</div>
+    <div class="cs"><span class="eyebrow">Next follow-up</span><div class="ff">${fieldHTML({k:'followAt',t:'dt',l:'When',cls:'sm'})}${fieldHTML({k:'followWhat',l:'What for'})}</div>${fe?'':`<div class="ff">${fieldHTML({k:'apptDay',t:'date',l:'Appt date',cls:'sm'})}${fieldHTML({k:'apptTime',l:'Appt time',cls:'sm'})}</div>`}</div>
+    <div class="cs"><span class="eyebrow">Notes and activity</span>
+      <label class="fld wide" for="noteNew"><span class="fl">Add a note from the call</span><textarea class="fin" id="noteNew" rows="3" placeholder="What they said, what you promised, what's next"></textarea></label>
+      <div class="acts"><select class="filt" id="noteKind" aria-label="Note type" style="flex:0 1 140px"><option value="note">Note</option><option value="call">Call</option><option value="vm">Voicemail</option><option value="text">Text</option></select><button type="button" class="tbtn primary" data-act="addNote">Add to activity</button></div>
+      <ul class="log" data-card="log"></ul></div>
+    <div class="cs"><div class="meter"><span class="eyebrow">Verify the lead</span><b data-card="vc"></b></div><div data-card="verify" style="display:flex;flex-direction:column;gap:10px"></div></div>
+    <div class="cs"><span class="eyebrow">Snapshot</span><div data-card="snap"></div></div>
+    <div class="cs"><details ${['quoted','app','inforce'].includes(L.status)?'open':''}><summary>Policy</summary><div class="ff" style="margin-top:10px">
+      ${fieldHTML({k:'carrier',t:'list',l:'Carrier',cls:'sm'})}${fieldHTML({k:'polCov',t:'money',l:'Coverage',cls:'sm'})}${fieldHTML({k:'polPrem',t:'money',l:'Premium / mo',cls:'sm'})}${fieldHTML({k:'appDate',t:'date',l:'App date',cls:'sm'})}${fieldHTML({k:'draftDate',l:'Draft day',cls:'sm'})}${fieldHTML({k:'policyNo',l:'Policy number',cls:'sm'})}${fieldHTML({k:'effDate',t:'date',l:'In force date',cls:'sm'})}</div><div data-card="wn" style="margin-top:10px"></div></details></div>
+    ${fe?`<div class="cs"><details><summary>Objection handling</summary><p class="fl" style="margin:8px 0 0">Acknowledge it, ask one question to find the real concern, then go back to the three options. Two honest attempts, then respect the no and set a follow-up.</p><ul class="phr">${OBJ.map(([a,b,c,d])=>`<li><b>${esc(a)}</b><span class="why">${esc(b)}</span>${fill(c)}${d?`<span class="why" style="margin-top:4px">${fill(d)}</span>`:''}</li>`).join('')}</ul></details></div>
+      <div class="cs"><details><summary>Voicemail and texts · ${op(L)==='A'?'fresh':'aged'}</summary><p class="fl" style="margin:8px 0 0">Keep voicemails under 20 seconds and say your number twice. Text only leads whose consent covers texting, and include an opt-out on the first text. Don't send pricing by text.</p><ul class="phr">${tpls.map(([t,s],i)=>`<li><b>${esc(t)}</b><br>${fill(s)}<br><button type="button" class="mini" data-act="copyTpl" data-i="${i}" style="margin-top:4px">Copy</button></li>`).join('')}</ul></details></div>`
+    :(L.step===2?'':`<div class="cs"><details open><summary>Power phrases</summary><ul class="phr">
+      <li>"That's exactly why I'm calling."</li><li>"Here's what we're going to do."</li><li>"Let's do this…"</li><li>"I can try to squeeze you in at {{timeB}}."</li>
+      <li>"Grab a pen and let me know when you're ready." <span class="why">Not "Can you grab a pen?"</span></li>
+      <li><b>If they say "Can you just email me / call me back later?"</b><br>"That's a great idea! I'll be super brief. Let me verify your information quickly, then I'll get your options out to you."</li>
+      <li class="why">We never email options. The first call books the appointment; options are shared live.</li></ul></details></div>`)}
+    <div class="cs"><details id="allf"><summary>All lead fields</summary><div class="ff" style="margin-top:10px">${lf.map(([k,l])=>fieldHTML({k,l,cls:['state','zip','age','spouseAge','gender'].includes(k)?'sm':''})).join('')}</div>
+      ${has(L.trustedForm)?`<p class="fl" style="margin:10px 0 0">TrustedForm certificate: <a href="${esc(L.trustedForm)}" target="_blank" rel="noopener">open</a></p>`:''}
+      ${extra.length?`<div style="margin-top:12px"><span class="eyebrow">Other columns from your sheet</span><dl class="kv extra" style="margin-top:6px">${extra.map(([k,v])=>`<dt>${esc(k)}</dt><dd style="font-weight:400">${esc(v)}</dd>`).join('')}</dl></div>`:''}</details></div>
+    <div class="cs"><button type="button" class="danger${delArmed?' armed':''}" data-act="delLead">${delArmed?'Tap again to delete this lead':'Delete lead'}</button></div>`;
+}
+function refreshCard(L){
+  const c=$('#card');if(!c||!L)return;
+  const n=$('[data-card="name"]',c);if(!n)return;
+  n.textContent=fullName(L)+(!isFE(L)&&isMarried(L)&&L.spouseName?' & '+L.spouseName:'');
+  $('[data-card="dials"]',c).textContent=(L.dials||0)+' dial'+(L.dials===1?'':'s');
+  const ci=STAGE_I[L.status];
+  $('[data-card="stepper"]',c).innerHTML=STAGES.map(([k,l],i)=>`<button type="button" class="stp${k===L.status?' cur':(ci!==undefined&&i<ci?' done':'')}" data-act="stage" data-v="${k}">${l}</button>`).join('')+PARKED.map(([k,l])=>`<button type="button" class="stp park${k===L.status?' cur':''}${k!=='callback'?' bad':''}" data-act="stage" data-v="${k}">${l}</button>`).join('');
+  $('[data-card="log"]',c).innerHTML=(L.log||[]).length?L.log.slice(0,40).map(e=>`<li><span class="lk ${e.k}">${LOGK[e.k]||e.k}</span><span class="lx">${esc(e.x||'')}</span><span class="lt">${fmtDT(e.t)}</span></li>`).join(''):`<li style="color:var(--muted)">No activity yet.</li>`;
+  const wn=$('[data-card="wn"]',c);if(wn)wn.innerHTML=writingHTML(L.carrier);
+  const [a,b]=vCount(L);$('[data-card="vc"]',c).textContent=`${a} of ${b}`;
+  $('[data-card="verify"]',c).innerHTML=vfList(L).map(k=>{const v=vshow(k,L),st=L.v[k];return `<div class="vrow"><span class="vl">${VF[k].label}</span><span class="vv${has(v)?'':' miss'}">${has(v)?esc(v):'not on lead'}</span>${st==='fixed'&&has(L.orig[k])?`<span class="was">Lead had: ${esc(L.orig[k])}</span>`:''}<button type="button" class="vs ${st||''}" data-act="vok" data-k="${k}">${st==='ok'?'Verified':st==='fixed'?'Corrected':'Verify'}</button></div>`}).join('');
+  const a2=ageOf(L);let rows;
+  if(isFE(L)){const ab=stAbbr(L.state);rows=[['Age',isFinite(a2)?a2+(L.gender?' · '+L.gender:''):''],['State',ab?stName(ab)+(licensedList().includes(ab)?' · licensed':' · NOT licensed'):''],['Requested',L.amountRequested],['Beneficiary',[L.benFull||L.beneficiary,L.benRel].filter(has).join(' · ')],['Has coverage',L.hasLife],['Heart / stroke / cancer',L.heartStrokeCancer],['Tobacco',({yes:'Yes',no:'No'})[L.tobacco]],['Budget',L.budget?money(num(L.budget))+'/mo':''],['Payday',L.payday],['Picked',chosenText(L)]]}
+  else {const r=road(L);rows=[['Age',isFinite(a2)?a2+(isMarried(L)&&isFinite(spAgeOf(L))?' · spouse '+spAgeOf(L):''):''],['Loan',money(num(L.loanAmount))+(L.loanTerm&&L.loanTerm!=='other'?' · '+L.loanTerm+'-yr':'')],['Payment',L.monthlyPayment?money(num(L.monthlyPayment))+'/mo':''],['Beneficiary',L.beneficiary||''],['Concern',L.mainConcern||''],['Tobacco',({yes:'Yes',no:'No'})[L.tobacco]],['Road',r.k?r.t:''],['Appt',L.apptDay?fmtAppt(L.apptDay)+(L.apptTime?' at '+L.apptTime:''):'']]}
+  $('[data-card="snap"]',c).innerHTML=`<dl class="kv">${rows.map(([k,v])=>`<dt>${k}</dt><dd${has(v)?'':' class="miss"'}>${has(v)?esc(v):'—'}</dd>`).join('')}</dl>`;
+}
+function dueList(){const end=new Date(TODAY);end.setHours(23,59,59);return S.leads.filter(L=>has(L.followAt)&&new Date(L.followAt)<=end&&!['dnc','notint','inforce'].includes(L.status)).sort((a,b)=>new Date(a.followAt)-new Date(b.followAt))}
+function renderBoard(){
+  const el=$('#board');
+  const prem=ks=>S.leads.filter(L=>ks.includes(L.status)).reduce((s,L)=>s+(num(L.polPrem)||num(L['optPrem'+L.chosen])||0),0);
+  const cnt=ks=>S.leads.filter(L=>ks.includes(L.status)).length;
+  const due=dueList();
+  const cols=STAGES.map(([k,l])=>({k,l,items:S.leads.filter(L=>L.status===k)})).concat([{k:'parked',l:'Parked',items:S.leads.filter(L=>PARKED.some(p=>p[0]===L.status))}]);
+  const nextOf=k=>{const i=STAGE_I[k];return i!==undefined&&i<STAGES.length-1?STAGES[i+1]:null};
+  el.innerHTML=`<div class="bsum">
+    <div><b>${S.leads.length}</b><span>leads in the desk</span></div>
+    <div><b>${cnt(['appt'])}</b><span>appointments set</span></div>
+    <div><b>${cnt(['app'])}</b><span>applications pending · ${money2(prem(['app']))}/mo</span></div>
+    <div><b>${cnt(['inforce'])}</b><span>policies in force · ${money2(prem(['inforce']))}/mo</span></div></div>
+    <div class="due"><span class="eyebrow">Follow-ups due today</span>${due.length?`<ul>${due.map(L=>{const d=new Date(L.followAt);return `<li><button type="button" data-act="openLead" data-id="${L.id}">${esc(fullName(L))}</button> · ${d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}${has(L.followWhat)?' · '+esc(L.followWhat):''}${startOfDay(d)<startOfDay(TODAY)?'<span class="late">overdue</span>':''}</li>`}).join('')}</ul>`:'<p style="margin:6px 0 0;color:var(--muted);font-size:14px">Nothing due. Set follow-ups on the lead card.</p>'}</div>
+    <div class="cols">${cols.map(c=>`<div class="col"><div class="col-h"><b>${c.l}</b><span>${c.items.length}</span></div>${c.items.map(L=>{const nx=nextOf(L.status);return `<div class="mc"><button type="button" class="mo" data-act="openLead" data-id="${L.id}"><span class="ty ${L.type}">${L.type==='fe'?'FE':'MP'}</span>${esc(fullName(L))}</button><span class="ms">${esc(subLine(L)||L.phone||'')}${c.k==='parked'?' · '+STATUS_L[L.status]:''}</span><div class="mf">${has(L.followAt)?`<span class="fu">${esc(new Date(L.followAt).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}))}</span>`:'<span></span>'}${nx?`<button type="button" class="nx" data-act="advance" data-id="${L.id}" title="Move to ${nx[1]}">${nx[1]} →</button>`:''}</div></div>`}).join('')||'<p class="col-empty">None</p>'}</div>`).join('')}</div>`;
+}
+function refresh(){
+  const L=cur();
+  document.body.dataset.view=S.view;$('#vDial').classList.toggle('on',S.view==='dialer');$('#vPipe').classList.toggle('on',S.view==='pipeline');$('#vProf').classList.toggle('on',S.view==='profile');
+  $('#profDot').className=credAlerts().length?'dot':'';refreshAvatars();
+  $('#stats').innerHTML=`<span><b>${S.stats.dials}</b>/500 dials</span><span><b>${S.stats.appts}</b>/20 appts</span><span><b>${S.stats.apps}</b> apps this week</span>`;
+  renderSteps(L);renderList();
+  if(S.view==='pipeline')renderBoard();
+  if(!L)return;
+  $$('[data-tok]').forEach(e=>{const {v,ph}=tokVal(e.dataset.tok,L);e.textContent=v||(ph?'['+ph+']':'');e.classList.toggle('miss',!v&&!!ph);e.classList.toggle('blank',!v&&!ph)});
+  $$('.vchip').forEach(e=>{const k=e.dataset.vf;if(e.dataset.editing||!VF[k])return;const v=vshow(k,L),st=L.v[k];
+    $('.vval',e).textContent=has(v)?v:'['+VF[k].label.toLowerCase()+' not on lead]';e.className='vchip'+(has(v)?'':' miss')+(st?' '+st:'');
+    e.title=st==='fixed'&&has(L.orig[k])?'Lead had: '+L.orig[k]:st==='ok'?'Verified':'Not verified yet'});
+  $$('[data-when]').forEach(e=>{try{e.hidden=!WH[+e.dataset.when](L)}catch(x){}});
+  $$('[data-calc]').forEach(e=>{try{const h=CA[+e.dataset.calc](L);if(e._h!==h){e.innerHTML=h;e._h=h;fillToks(e,L)}}catch(x){e.innerHTML=''}});
+  const DEF={married:x=>isMarried(x)?'yes':'',opener:x=>op(x),type:x=>x.type,qpNic:nicOf,qpTerm:termOf};
+  $$('[data-cf]').forEach(g=>{const k=g.dataset.cf;const val=has(L[k])&&k!=='opener'?L[k]:(DEF[k]?DEF[k](L):(L[k]??''));$$('button',g).forEach(b=>b.classList.toggle('on',String(val)===b.dataset.v))});
+  $$('.fin[data-f]').forEach(e=>{if(e===document.activeElement)return;const v=L[e.dataset.f]??'';if(e.value!==String(v))e.value=v});
+  const hp=$('[data-hdr="stage"]');if(hp){hp.className='pill '+L.status;hp.textContent=STATUS_L[L.status]}
+  refreshCard(L);
+}
+function fillToks(root,L){$$('[data-tok]',root).forEach(e=>{const {v,ph}=tokVal(e.dataset.tok,L);e.textContent=v||(ph?'['+ph+']':'')})}
+function renderAll(){delArmed=false;renderScript();renderCard();refresh()}
+function touch(){save()}
+
+/* ---------- events ---------- */
+function setPane(p){document.body.dataset.pane=p;$$('.panes button').forEach(b=>b.classList.toggle('on',b.dataset.pane===p))}
+function openLead(id){S.active=id;S.view='dialer';touch();renderAll();if(innerWidth<=1080)setPane('script');scrollTo({top:0})}
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-act]');if(!t)return;const a=t.dataset.act,L=cur();
+  if(a!=='delLead'&&delArmed){delArmed=false;const d=$('.danger');if(d){d.classList.remove('armed');d.textContent='Delete lead'}}
+  switch(a){
+    case 'pick-lead':if(S.view==='pipeline'){openLead(t.dataset.id);break}S.active=t.dataset.id;touch();renderAll();if(innerWidth<=1080)setPane('script');scrollTo({top:0});break;
+    case 'openLead':openLead(t.dataset.id);break;
+    case 'view':S.view=t.dataset.v;$$('.modal').forEach(m=>m.hidden=true);if(S.view==='profile')renderProfile();touch();refresh();scrollTo({top:0});break;
+    case 'photoAdjust':{const a=$('#adj');if(a)a.hidden=!a.hidden}break;
+    case 'photoRemove':P().photo='';touch();renderProfile();refresh();break;
+    case 'addRow':{const l=t.dataset.list;P()[l].push(l==='states'?{id:uid(),st:'',num:'',home:!P().states.length,exp:''}:{id:uid(),carrier:'',num:'',status:'Appointed'});touch();renderProfile();refresh();const rows=$$(`[data-row="${l}"]`);const f=rows[rows.length-1]&&$('.fin',rows[rows.length-1]);f&&f.focus()}break;
+    case 'rmRow':if(t.dataset.armed){P()[t.dataset.list].splice(+t.dataset.i,1);touch();renderProfile();refresh()}else{t.dataset.armed='1';t.classList.add('armed');t.textContent='Remove?';setTimeout(()=>{if(t.isConnected){delete t.dataset.armed;t.classList.remove('armed');t.textContent='✕'}},3000)}break;
+    case 'homeState':P().states.forEach((x,i)=>x.home=i===+t.dataset.i);touch();renderProfile();break;
+    case 'copyIn':{const i=t.parentElement.querySelector('input');if(i)copyText(i.value).then(ok=>flash(t,ok?'Copied':'Select it'))}break;
+    case 'reveal':{const i=t.parentElement.querySelector('input');if(i){const show=i.type==='password';i.type=show?'text':'password';t.textContent=show?'Hide':'Show'}}break;
+    case 'advance':{const x=S.leads.find(l=>l.id===t.dataset.id);const i=STAGE_I[x?.status];if(x&&i!==undefined&&i<STAGES.length-1){setStage(x,STAGES[i+1][0]);touch();refresh()}}break;
+    case 'step':if(L){L.step=+t.dataset.step;touch();renderAll();scrollTo({top:0})}break;
+    case 'opener':if(L){L.opener=t.dataset.v;touch();renderAll()}break;
+    case 'go2':if(L){L.step=2;touch();renderAll();scrollTo({top:0})}break;
+    case 'pick':if(L){const k=t.dataset.f,v=t.dataset.v;
+      if(k==='type'){if(L.type!==v){L.type=v;touch();renderAll()}break}
+      if(k==='opener'){L.opener=v;touch();renderAll();break}
+      L[k]=L[k]===v?'':v;touch();refresh()}break;
+    case 'stage':if(L){setStage(L,t.dataset.v);touch();refresh()}break;
+    case 'vok':if(L){const k=t.dataset.k;if(L.v[k])delete L.v[k];else L.v[k]='ok';touch();refresh()}break;
+    case 'vedit':if(L)editChip(t.closest('.vchip'),L);break;
+    case 'jump':{const s=$('#sec-'+t.dataset.sec);if(s)s.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth',block:'start'})}break;
+    case 'dial':if(L){const o=t.dataset.o;if(o!=='text'){L.dials=(L.dials||0)+1;S.stats.dials++}L.lastDial=Date.now();logAct(L,o,{na:'Called, no answer',vm:'Left a voicemail',text:'Sent a text',talk:'Talked with them'}[o]);if(o==='talk'&&L.status==='new')setStage(L,'contacted');touch();refresh();flash(t,'Logged')}break;
+    case 'addNote':if(L){const ta=$('#noteNew'),x=ta.value.trim();if(!x){ta.focus();break}logAct(L,$('#noteKind').value,x);ta.value='';touch();refresh()}break;
+    case 'markAppt':if(L){setStage(L,'appt');touch();refresh();flash(t,'Appointment set')}break;
+    case 'markQuoted':if(L){setStage(L,'quoted');touch();refresh();flash(t,'Marked quoted')}break;
+    case 'markApp':if(L){setStage(L,'app');if(!has(L.appDate))L.appDate=new Date().toISOString().slice(0,10);if(L.chosen){if(!has(L.polCov))L.polCov=L['optCov'+L.chosen]||'';if(!has(L.polPrem))L.polPrem=L['optPrem'+L.chosen]||''}touch();renderCard();refresh();flash(t,'Application logged')}break;
+    case 'markDnc':if(L){setStage(L,'dnc');touch();refresh();flash(t,'Marked do not call')}break;
+    case 'copy':copyText(t.dataset.copy).then(ok=>flash(t,ok?'Copied':'Select it'));break;
+    case 'copyTpl':if(L){const s=TPL[op(L)][+t.dataset.i][1];copyText(plainFill(s,L)).then(ok=>flash(t,ok?'Copied':'Copy blocked'))}break;
+    case 'copyQuote':if(L&&!isFE(L)){const a2=ageOf(L),sa=spAgeOf(L);const s=[`Client: ${fullName(L)}`,`State: ${stName(L.state)}`,`Age: ${isFinite(a2)?a2:''}`,`DOB: ${L.dob||''}`,`Tobacco: ${L.tobacco||''}`,`Height/weight: ${L.hwA||''}`,`Health: ${L.health||''}`,`Meds: ${L.meds||''}`,`History: ${L.history||''}`,isMarried(L)?`Spouse: ${L.spouseName||''} ${isFinite(sa)?'age '+sa:''} tobacco ${L.spouseTobacco||''} meds ${L.spouseMeds||''}`:'',`Loan: ${L.loanAmount||''}`,`Payment: ${L.monthlyPayment||''}`].filter(Boolean).join('\n');copyText(s).then(ok=>flash(t,ok?'Copied':'Copy blocked'));break}
+      if(L){const a2=ageOf(L);const s=[`Client: ${fullName(L)}`,`State: ${stName(L.state)}`,`Age: ${isFinite(a2)?a2:''}`,`DOB: ${L.dob||''}`,`Gender: ${L.gender||''}`,`Height/weight: ${L.hwA||''}`,`Tobacco: ${L.tobacco||''}`,`Meds: ${L.meds||''}`,`Flags: ${HQ.filter(([k])=>L[k]==='yes').map(x=>x[1]).join('; ')||'none'}`,`Budget: ${L.budget||''}`].join('\n');copyText(s).then(ok=>flash(t,ok?'Copied':'Copy blocked'))}break;
+    case 'addLead':{const n=newLead({firstName:'',type:cur()?.type||'mp'});S.leads.unshift(n);S.active=n.id;S.view='dialer';touch();renderAll();if(innerWidth<=1080)setPane('card');const d=$('#allf');if(d){d.open=true;const i=$('.fin[data-f="firstName"]',d);i&&i.focus()}}break;
+    case 'delLead':if(!delArmed){delArmed=true;t.classList.add('armed');t.textContent='Tap again to delete this lead'}else{S.leads=S.leads.filter(l=>l.id!==S.active);S.active=S.leads[0]?.id||null;touch();renderAll()}break;
+    case 'clearSamples':S.leads=S.leads.filter(l=>!l.sample);if(!cur())S.active=S.leads[0]?.id||null;touch();renderAll();break;
+    case 'pane':setPane(t.dataset.pane);scrollTo({top:0});break;
+    case 'openImport':openM('#importM');break;
+    case 'openSettings':['timeA','timeB'].forEach(k=>$('#s-'+k).value=S.set[k]||'');$('#expArea').hidden=true;$('#expMsg').textContent='';openM('#setM');break;
+    case 'closeM':$$('.modal').forEach(m=>m.hidden=true);break;
+    case 'readPaste':parseInput($('#paste').value);break;
+    case 'doImport':doImport();break;
+    case 'exportCsv':exportCsv();break;
+  }
+});
+document.addEventListener('input',e=>{
+  const t=e.target;
+  if(t.matches('.fin[data-f]')){const L=cur();if(!L)return;const k=t.dataset.f;
+    L[k]=t.value;if(k==='age')L.ageOverride=false;if(k==='spouseAge')L.spouseAgeOverride=false;
+    touch();refresh();return}
+  if(t.matches('[data-s]')){S.set[t.dataset.s]=t.value;touch();refresh();return}
+  if(t.matches('[data-p]')){P()[t.dataset.p]=t.type==='range'?+t.value:t.value;touch();profileDerived();return}
+  if(t.matches('[data-pl]')){const r=P()[t.dataset.pl][+t.dataset.i];if(r){r[t.dataset.pk]=t.value;touch();profileDerived()}return}
+  if(t.id==='q')renderList();
+});
+$('#filt').innerHTML=`<option value="">All stages</option>`+STATUS.map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+$('#filt').addEventListener('change',renderList);$('#tfilt').addEventListener('change',renderList);
+function flash(btn,msg){const o=btn.innerHTML;btn.textContent=msg;setTimeout(()=>{if(!btn.isConnected)return;btn.innerHTML=o;const L=cur();if(L)fillToks(btn,L)},1400)}
+async function copyText(s){try{await navigator.clipboard.writeText(s);return true}catch(e){return false}}
+function editChip(chip,L){
+  const k=chip.dataset.vf,old=vshow(k,L);chip.dataset.editing='1';
+  const start=k==='loanAmount'?(L.loanAmount||''):old;
+  chip.innerHTML=`<input type="text" aria-label="Correct ${esc(VF[k].label)}" value="${esc(start)}">`;
+  const i=$('input',chip);i.focus();i.select();let done=false;
+  const finish=commit=>{if(done)return;done=true;delete chip.dataset.editing;
+    if(commit&&i.value.trim()!==String(start).trim()){if(!(k in L.orig))L.orig[k]=old||'(blank)';(VF[k].set||((L,v)=>L[k]=v))(L,i.value.trim());L.v[k]='fixed';touch()}
+    chip.outerHTML=fill('[[v:'+k+']]');refresh()};
+  i.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();finish(true)}if(ev.key==='Escape')finish(false)});
+  i.addEventListener('blur',()=>finish(true));
+}
+function openM(sel){$(sel).hidden=false}
+$$('.modal').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.hidden=true}));
+document.addEventListener('keydown',e=>{if(e.key==='Escape')$$('.modal').forEach(m=>m.hidden=true)});
+
+/* ---------- import ---------- */
+const SYN={firstName:['firstname','first','fname','givenname','clientfirstname','borrowerfirstname','insuredfirstname'],lastName:['lastname','last','lname','surname','clientlastname','borrowerlastname'],
+  fullName:['name','fullname','clientname','borrowername','borrower','insuredname','leadname','contactname'],
+  phone:['phone','phonenumber','cell','cellphone','mobile','mobilephone','homephone','primaryphone','phone1','telephone','bestphone'],email:['email','emailaddress','e-mail'],
+  address:['address','streetaddress','street','address1','propertyaddress','mailingaddress','homeaddress'],city:['city','town'],state:['state','st','province'],zip:['zip','zipcode','postalcode','postal'],
+  loanAmount:['loanamount','mortgageamount','mortgage','loan','mortgagebalance','loanamt','loanbalance','balance'],lender:['lender','mortgagelender','bank','mortgagecompany'],
+  dob:['dob','dateofbirth','birthdate','birthday','borrowerdob'],age:['age','borrowerage','clientage'],gender:['gender','sex'],
+  spouseName:['spousename','spouse','spousefirstname','coborrower','coborrowername','coborrowerfirstname','cobfirstname'],spouseDob:['spousedob','spousedateofbirth','spousebirthdate','coborrowerdob','cobdob'],spouseAge:['spouseage','coborrowerage','cobage'],
+  leadSource:['source','leadsource','vendor','campaign'],leadDate:['leaddate','date','received','datereceived','createddate','created','datetime','timestamp','submitted','datesubmitted'],notes:['notes','comments','note'],
+  tobacco:['tobacco','smoker','nicotine'],monthlyPayment:['monthlypayment','payment','mortgagepayment'],
+  amountRequested:['amtrequested','amountrequested','coveragerequested','faceamount','amount','coverageamount','requestedamount'],
+  beneficiary:['beneficiaryname','benname'],benRel:['beneficiary','beneficiaryrelationship','relationship','benrelationship'],
+  hasLife:['havelifeinsurance','haslifeinsurance','currentlifeinsurance','existingcoverage','currentcoverage'],hobby:['favoritehobby','hobby','hobbies'],
+  platform:['platform'],ad:['ad','adname','creative'],interestedIn:['interestedin','product','interest','producttype'],trustedForm:['trustedformurl','trustedform','certurl','trustedformcert']};
+const MAP_OPTS=[['','Keep as extra'],['fullName','Full name (split)'],['firstName','First name'],['lastName','Last name'],['phone','Phone'],['email','Email'],['address','Street address'],['city','City'],['state','State'],['zip','ZIP'],['dob','Date of birth'],['age','Age'],['gender','Gender'],['loanAmount','Loan amount'],['lender','Lender'],['spouseName',"Spouse's name"],['spouseDob',"Spouse's DOB"],['spouseAge',"Spouse's age"],['monthlyPayment','Monthly payment'],['amountRequested','Amount requested'],['beneficiary','Beneficiary name'],['benRel','Beneficiary relationship'],['hasLife','Has life insurance'],['heartStrokeCancer','Heart attack / stroke / cancer'],['hobby','Favorite hobby'],['tobacco','Tobacco'],['platform','Platform'],['ad','Ad'],['interestedIn','Interested in'],['trustedForm','TrustedForm URL'],['leadSource','Lead source'],['leadDate','Lead date'],['notes','Notes'],['__skip','Ignore column']];
+const normH=h=>String(h).toLowerCase().replace(/[^a-z0-9]/g,'');
+function guess(h){const n=normH(h);for(const [k,arr] of Object.entries(SYN))if(arr.includes(n))return k;
+  if(/heart|stroke|cancer/.test(n))return 'heartStrokeCancer';
+  if(n.includes('lifeinsurance'))return 'hasLife';
+  if(n.includes('spouse')||n.includes('coborrower')){if(n.includes('dob')||n.includes('birth'))return 'spouseDob';if(n.includes('age'))return 'spouseAge';return 'spouseName'}
+  if(n.includes('beneficiary'))return n.includes('name')?'beneficiary':'benRel';
+  if(n.includes('phone')||n.includes('cell'))return 'phone';if(n.includes('email'))return 'email';if(n.includes('loan')||n.includes('mortgage'))return 'loanAmount';return ''}
+function parseDelim(text){
+  const first=text.split(/\r?\n/)[0]||'';const d=(first.match(/\t/g)||[]).length>(first.match(/,/g)||[]).length?'\t':',';
+  const rows=[];let row=[],f='',q=false;
+  for(let i=0;i<text.length;i++){const c=text[i];
+    if(q){if(c==='"'){if(text[i+1]==='"'){f+='"';i++}else q=false}else f+=c}
+    else if(c==='"')q=true;else if(c===d){row.push(f);f=''}else if(c==='\n'||c==='\r'){if(c==='\r'&&text[i+1]==='\n')i++;row.push(f);rows.push(row);row=[];f=''}else f+=c}
+  if(f!==''||row.length){row.push(f);rows.push(row)}
+  return rows.filter(r=>r.some(c=>String(c).trim()!==''));
+}
+let IMP=null;
+function parseInput(text){if(!text.trim()){impMsg('Paste some rows first.',1);return}showMap(parseDelim(text))}
+function showMap(rows){
+  if(!rows||rows.length<2){impMsg('I need a header row plus at least one lead row.',1);return}
+  const head=rows[0].map(h=>String(h).trim()),body=rows.slice(1);
+  IMP={head,body,map:head.map(guess)};
+  $('#mapTbl').innerHTML=`<table><thead><tr><th>Your column</th><th>Goes to</th><th>Example</th></tr></thead><tbody>${head.map((h,i)=>`<tr><td>${esc(h||'(blank)')}</td><td><select data-mi="${i}" aria-label="Map ${esc(h)}">${MAP_OPTS.map(([v,l])=>`<option value="${v}"${IMP.map[i]===v?' selected':''}>${l}</option>`).join('')}</select></td><td class="ex">${esc(body.find(r=>has(r[i]))?.[i]??'')}</td></tr>`).join('')}</tbody></table>`;
+  $$('#mapTbl select').forEach(s=>s.addEventListener('change',()=>IMP.map[+s.dataset.mi]=s.value));
+  $('#mapWrap').hidden=false;$('#doImp').disabled=false;$('#doImp').textContent=`Add ${body.length} lead${body.length===1?'':'s'}`;
+  impMsg(`Found ${body.length} row${body.length===1?'':'s'} and ${head.length} columns.`);
+}
+function impMsg(m,err){const e=$('#impMsg');e.textContent=m;e.classList.toggle('err',!!err)}
+const digits=s=>String(s||'').replace(/\D/g,'');
+const yesNo=v=>/^(y|yes|true|1)$/i.test(String(v).trim())?'Yes':/^(n|no|false|0)$/i.test(String(v).trim())?'No':v;
+function rowToLead(head,map,r,typeSel){
+  const L=newLead();
+  map.forEach((k,i)=>{const v=String(r[i]??'').trim();if(!v||/^n\/?a$/i.test(v)&&k==='age')return;
+    if(k==='__skip')return;
+    if(k==='fullName'){const p=v.split(/\s+/);if(!L.firstName)L.firstName=p.shift();if(!L.lastName)L.lastName=p.join(' ');return}
+    if(k==='spouseName'&&/\s/.test(v)&&!L.spouseName){L.spouseName=v.split(/\s+/)[0];return}
+    if(k)L[k]=k==='loanAmount'||k==='monthlyPayment'?String(num(v)||v):v; else L.extra[head[i]||'Column '+(i+1)]=v});
+  if(L.tobacco)L.tobacco=/^(y|yes|true|1|smoker)/i.test(L.tobacco)?'yes':'no';
+  ['hasLife','heartStrokeCancer'].forEach(k=>{if(has(L[k]))L[k]=yesNo(L[k])});
+  if(has(L.beneficiary))L.beneficiary=L.beneficiary.replace(/\s+/g,' ').trim();
+  if(has(L.hobby))L.hobby=L.hobby.trim();
+  L.type=typeSel!=='auto'?typeSel:(/final expense|burial|funeral/i.test(L.interestedIn||'')||(has(L.amountRequested)&&!has(L.loanAmount))?'fe':'mp');
+  return L;
+}
+function doImport(){
+  if(!IMP)return;let added=0,dup=0;const fresh=[],typeSel=$('#impType').value;
+  for(const r of IMP.body){
+    const L=rowToLead(IMP.head,IMP.map,r,typeSel);
+    if(!has(L.firstName)&&!has(L.lastName)&&!has(L.phone))continue;
+    const isDup=S.leads.concat(fresh).some(o=>(digits(o.phone)&&digits(o.phone)===digits(L.phone))||(fullName(o)===fullName(L)&&has(o.address)&&o.address===L.address));
+    if(isDup){dup++;continue}
+    logAct(L,'stage','Imported as '+(L.type==='fe'?'final expense':'mortgage protection')+' lead');
+    fresh.push(L);added++;
+  }
+  S.leads=fresh.concat(S.leads);if(fresh[0])S.active=fresh[0].id;S.view='dialer';touch();
+  impMsg(`Added ${added} lead${added===1?'':'s'}${dup?`, skipped ${dup} already in your list`:''}.`);
+  $('#doImp').disabled=true;IMP=null;$('#mapWrap').hidden=true;$('#paste').value='';
+  renderAll();setTimeout(()=>{$('#importM').hidden=true;impMsg('')},1400);
+}
+let xlsxP=null;
+function loadXlsx(){if(window.XLSX)return Promise.resolve();if(xlsxP)return xlsxP;xlsxP=new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=res;s.onerror=()=>{xlsxP=null;rej()};document.head.appendChild(s)});return xlsxP}
+async function readFile(file){
+  if(!file)return;impMsg('Reading '+file.name+'…');
+  try{
+    if(/\.xlsx?$/i.test(file.name)){await loadXlsx();const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];
+      showMap(XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''}).filter(r=>r.some(c=>String(c).trim()!=='')))}
+    else showMap(parseDelim(await file.text()));
+  }catch(e){impMsg("Couldn't read that file. Try saving it as CSV, or paste the rows instead.",1)}
+}
+$('#file').addEventListener('change',e=>readFile(e.target.files[0]));
+const drop=$('#drop');
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',e=>readFile(e.dataTransfer.files[0]));
+
+/* ---------- export ---------- */
+const EXP=[['type','Lead type'],...LEAD_FIELDS,['status','Stage'],['dials','Dials'],['followAt','Next follow-up'],['followWhat','Follow-up for'],['apptDay','Appt date'],['apptTime','Appt time'],['benFull','Beneficiary full name'],['married','Married'],['health','Health'],['tobacco','Tobacco'],['meds','Medications'],['hospital','Hospital stays'],['history','Health history'],['hwA','Height/weight'],['occupation','Occupation'],['loanTerm','Loan term'],['monthlyPayment','Monthly payment'],['mainConcern','Main concern'],['why','Why (FE)'],['budget','Budget (FE)'],['payday','Payday'],['program','Program'],['carrier','Carrier'],['planType','Plan type'],['polCov','Coverage'],['polPrem','Premium'],['appDate','App date'],['draftDate','Draft day'],['policyNo','Policy number'],['effDate','In force date']];
+function exportCsv(){
+  const q=v=>{v=String(v??'');return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
+  const lines=[EXP.map(x=>x[1]).concat(['Verified fields','Corrected (lead had)','Activity']).map(q).join(',')];
+  S.leads.forEach(L=>lines.push(EXP.map(([k])=>k==='status'?STATUS_L[L.status]:L[k]).concat([Object.keys(L.v).filter(k=>L.v[k]==='ok').join('; '),Object.entries(L.orig).map(([k,v])=>`${k}: ${v}`).join('; '),(L.log||[]).map(e=>`${fmtDT(e.t)} ${LOGK[e.k]||e.k}: ${e.x}`).join(' | ')]).map(q).join(',')));
+  const csv=lines.join('\n'),ta=$('#expArea');ta.value=csv;
+  copyText(csv).then(ok=>{$('#expMsg').textContent=ok?`Copied ${S.leads.length} leads. Paste into your sheet.`:'Copy blocked here. Select the text below and copy it.';if(!ok){ta.hidden=false;ta.focus();ta.select()}});
+}
+
+/* ---------- profile ---------- */
+const initials=n=>String(n||'').split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join('')||'·';
+function avHTML(){const p=P();return p.photo?`<img src="${p.photo}" alt="" style="object-position:${+p.photoX||50}% ${+p.photoY||35}%">`:esc(initials(p.name))}
+function refreshAvatars(){const h=avHTML();$$('[data-av]').forEach(e=>{if(e._h!==h){e.innerHTML=h;e._h=h}})}
+function renderCarrierList(){const base=['American Amicable','Americo','Corebridge/AIG','F&G','Foresters','LGA','Mutual of Omaha','SBLI','Transamerica','UHL','Aetna/CVS','Royal Neighbors','Gerber','Liberty Bankers','Prosperity'];
+  const mine=(P().writing||[]).filter(w=>has(w.carrier)&&w.status!=='Inactive').map(w=>w.carrier.replace(/\s*\(.*?\)\s*/g,' ').trim());
+  const all=[...new Set(mine.concat(base))];$('#carrierList').innerHTML=all.map(c=>`<option value="${esc(c)}"></option>`).join('')}
+function credAlerts(){const p=P(),out=[];
+  const chk=(label,d)=>{const x=parseDate(d);if(!x)return;const days=Math.round((startOfDay(x)-startOfDay(TODAY))/864e5);
+    if(days<0)out.push(['bad',`${label} expired ${fmtD(x)}.`]);else if(days<=60)out.push(['warn',`${label} expires in ${days} day${days===1?'':'s'} (${fmtD(x)}).`])};
+  chk('E&O coverage',p.eoExp);(p.states||[]).forEach(s=>chk(`${stName(s.st)||'State'} license`,s.exp));
+  if(!(p.states||[]).length)out.push(['warn','No licensed states yet. The final expense compliance check needs them.']);
+  return out}
+function profSummary(){const p=P(),st=licensedList(),home=(p.states||[]).find(x=>x.home),ap=(p.writing||[]).filter(w=>has(w.carrier)&&w.status==='Appointed').length,eo=parseDate(p.eoExp);
+  return `<span>NPN <b>${esc(p.npn||'—')}</b></span><span>Licensed <b>${st.length?esc(st.join(' · ')):'—'}</b></span>${home?`<span>Resident <b>${esc(stAbbr(home.st))}</b></span>`:''}<span>Appointed with <b>${ap}</b> carrier${ap===1?'':'s'}</span><span>E&amp;O through <b>${eo?esc(fmtD(eo)):'—'}</b></span>`}
+function profileDerived(){renderCarrierList();refreshAvatars();const a=$('[data-prof="alerts"]');if(a)a.innerHTML=credAlerts().map(([c,x])=>`<div class="${c}">${esc(x)}</div>`).join('');const sm=$('[data-prof="sum"]');if(sm)sm.innerHTML=profSummary();$('#profDot').className=credAlerts().length?'dot':'';
+  if(S.view==='dialer')refresh()}
+function pf(k,l,o={}){const id='p-'+k,v=P()[k]??'';let ctl;
+  if(o.t==='select')ctl=`<select class="fin" id="${id}" data-p="${k}">${(o.blank?['']:[]).concat(o.o).map(x=>`<option value="${esc(x)}"${x===v?' selected':''}>${esc(o.lab?o.lab(x):x||'—')}</option>`).join('')}</select>`;
+  else ctl=`<input class="fin" id="${id}" data-p="${k}" type="${o.t==='date'?'date':o.t==='pw'?'password':'text'}" value="${esc(v)}"${o.ph?` placeholder="${esc(o.ph)}"`:''}${o.im?` inputmode="${o.im}"`:''} autocomplete="off">`;
+  if(o.copy)ctl=`<span class="inrow">${ctl}<button type="button" class="mini" data-act="copyIn">Copy</button></span>`;
+  if(o.t==='pw')ctl=`<span class="inrow">${ctl}<button type="button" class="mini" data-act="reveal">Show</button></span>`;
+  return `<label class="fld${o.cls?' '+o.cls:''}" for="${id}"><span class="fl">${esc(l)}${o.hint?`<span class="hint">${esc(o.hint)}</span>`:''}</span>${ctl}</label>`}
+const stOpts=v=>`<option value="">Choose…</option>`+Object.keys(ST).map(a=>`<option value="${a}"${stAbbr(v)===a?' selected':''}>${a} · ${ST[a]}</option>`).join('');
+function renderProfile(){
+  const p=P(),el=$('#profile');
+  el.innerHTML=`<div class="prof">
+  <div class="alerts" data-prof="alerts">${credAlerts().map(([c,x])=>`<div class="${c}">${esc(x)}</div>`).join('')}</div>
+  <section class="psec"><div class="psec-h"><div><span class="eyebrow">Profile</span><p class="intro">Your photo, name, role and contact details. Your name and agency are what the scripts read on calls.</p></div></div>
+    <div class="phead"><span class="av" data-av></span><div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+      <div class="plinks"><label for="photoFile">${p.photo?'Change photo':'Add photo'}<input type="file" id="photoFile" accept="image/jpeg,image/png,image/webp" hidden></label>${p.photo?`<span style="color:var(--rule)">/</span><button type="button" data-act="photoAdjust">Adjust position</button><button type="button" class="quiet" data-act="photoRemove">Remove</button>`:''}</div>
+      <span class="fl">JPG or PNG. Adjust position sets where your face sits in the circle.</span>
+      <div class="adj" id="adj" hidden><label for="p-photoX">Left ↔ right<input type="range" id="p-photoX" data-p="photoX" min="0" max="100" value="${+p.photoX||50}"></label><label for="p-photoY">Up ↕ down<input type="range" id="p-photoY" data-p="photoY" min="0" max="100" value="${+p.photoY||35}"></label></div>
+    </div></div>
+    <div class="pgrid">${pf('name','Display name')}${pf('role','Role',{t:'select',o:ROLES})}${pf('phone','Phone number',{hint:'Licensing support only, never public'})}${pf('email','Email')}${pf('booking','Booking / calendar link',{ph:'https://calendly.com/your-handle'})}${pf('imo','IMO / agency')}</div>
+  </section>
+  <section class="psec"><div><span class="eyebrow">On your calls</span><p class="intro">What the scripts say when you introduce yourself and give out your number.</p></div>
+    <div class="pgrid">${pf('callAgency','Agency name you say on calls',{ph:'EST8 Financial'})}${pf('callPhone','Callback number you give clients',{ph:'(361) 761-0910'})}</div>
+  </section>
+  <section class="psec"><div><span class="eyebrow">Quoting</span><p class="intro">In Quoteplicity's Link Builder, pick an engine and copy the Link at the top. The desk adds the lead's state, DOB, gender, height, weight, nicotine, health class, coverage and term for you.</p></div>
+    <div class="pgrid">${pf('qpMp','Mortgage protection link (No Medical Exam or Term engine)',{ph:'https://…quoteplicity.com/quote/no-exam',im:'url'})}${pf('qpFe','Final expense link (Final Expense engine)',{ph:'https://…quoteplicity.com/quote/…',im:'url'})}
+      ${pf('qpContact',"Send the lead's name, email and phone",{t:'select',o:['no','yes'],lab:x=>x==='yes'?'Yes, send them':'No, quote only'})}</div>
+    <p class="fl" style="margin:0">Links must start with https://. Sending contact details can create a lead in your Quoteplicity CRM and trigger its automations, so it's off by default.</p>
+  </section>
+  <section class="psec"><div class="psec-h"><div><span class="eyebrow">Licensing</span><p class="intro">The final expense compliance check uses these states, and the scripts show your license number when a lead is in one of them.</p></div><button type="button" class="tbtn" data-act="addRow" data-list="states">+ Add state</button></div>
+    <div class="psum" data-prof="sum">${profSummary()}</div>
+    <div class="pgrid">${pf('npn','NPN (National Producer Number)',{copy:1,im:'numeric'})}</div>
+    <div>${(p.states||[]).map((x,i)=>`<div class="lrow" data-row="states">
+      <label class="fld sm" for="st-${x.id}"><span class="fl">State</span><select class="fin" id="st-${x.id}" data-pl="states" data-i="${i}" data-pk="st">${stOpts(x.st)}</select></label>
+      <label class="fld" for="sn-${x.id}"><span class="fl">License number</span><span class="inrow"><input class="fin" id="sn-${x.id}" data-pl="states" data-i="${i}" data-pk="num" value="${esc(x.num)}" autocomplete="off"><button type="button" class="mini" data-act="copyIn">Copy</button></span></label>
+      <label class="fld sm" for="se-${x.id}"><span class="fl">Expires</span><input class="fin" type="date" id="se-${x.id}" data-pl="states" data-i="${i}" data-pk="exp" value="${esc(x.exp||'')}"></label>
+      <button type="button" class="home${x.home?' on':''}" data-act="homeState" data-i="${i}" title="Resident (home) state" aria-pressed="${!!x.home}">${x.home?'Resident':'Make resident'}</button>
+      <button type="button" class="rm" data-act="rmRow" data-list="states" data-i="${i}" aria-label="Remove ${esc(x.st||'state')}">✕</button></div>`).join('')||'<p class="fl" style="margin:0">No states yet. Add each state you hold a license in.</p>'}</div>
+  </section>
+  <section class="psec"><div class="psec-h"><div><span class="eyebrow">Carrier writing numbers</span><p class="intro">These carriers fill the carrier suggestions in the scripts, and your writing number shows up when you pick a carrier on an application.</p></div><button type="button" class="tbtn" data-act="addRow" data-list="writing">+ Add carrier</button></div>
+    <div>${(p.writing||[]).map((w,i)=>`<div class="lrow" data-row="writing">
+      <label class="fld" for="wc-${w.id}"><span class="fl">Carrier</span><input class="fin" id="wc-${w.id}" data-pl="writing" data-i="${i}" data-pk="carrier" value="${esc(w.carrier)}" list="carrierList" autocomplete="off"></label>
+      <label class="fld" for="wn-${w.id}"><span class="fl">Writing number</span><span class="inrow"><input class="fin num" id="wn-${w.id}" data-pl="writing" data-i="${i}" data-pk="num" value="${esc(w.num)}" autocomplete="off"><button type="button" class="mini" data-act="copyIn">Copy</button></span></label>
+      <label class="fld sm" for="ws-${w.id}"><span class="fl">Status</span><select class="fin" id="ws-${w.id}" data-pl="writing" data-i="${i}" data-pk="status">${WSTAT.map(x=>`<option${x===w.status?' selected':''}>${x}</option>`).join('')}</select></label>
+      <button type="button" class="rm" data-act="rmRow" data-list="writing" data-i="${i}" aria-label="Remove ${esc(w.carrier||'carrier')}">✕</button></div>`).join('')||'<p class="fl" style="margin:0">No carriers yet. Add each carrier you are appointed with.</p>'}</div>
+  </section>
+  <section class="psec"><div><span class="eyebrow">Additional info</span><p class="intro">Details carriers and contracting ask for. You'll get a warning here 60 days before your E&amp;O or a state license expires.</p></div>
+    <div class="pgrid">${pf('dob','Date of birth',{t:'date'})}${pf('dl',"Driver's license number",{t:'pw'})}${pf('dlState',"Driver's license state",{t:'select',o:Object.keys(ST),blank:1,lab:a=>a?a+' · '+ST[a]:'—'})}<span></span>
+      ${pf('aml','AML provider',{ph:'SuranceBay, LLC.'})}${pf('amlDate','AML course completed',{t:'date'})}
+      ${pf('eo','E&O carrier')}${pf('eoPolicy','E&O policy number',{copy:1})}${pf('eoCert','E&O certificate number',{copy:1})}${pf('eoExp','E&O expires',{t:'date'})}</div>
+    <p class="fl" style="margin:0">Saved only in this browser, like your leads. Your DOB and driver's license number are never added to the page itself.</p>
+  </section></div>`;
+  const pfIn=$('#photoFile');if(pfIn)pfIn.addEventListener('change',e=>loadPhoto(e.target.files[0]));
+  $$('#profile [data-av]').forEach(e=>e._h=null);refreshAvatars();
+}
+function loadPhoto(file){if(!file||!/^image\//.test(file.type))return;const fr=new FileReader();
+  fr.onload=()=>{const img=new Image();img.onload=()=>{const mx=480,sc=Math.min(1,mx/Math.max(img.width,img.height)),c=document.createElement('canvas');c.width=Math.round(img.width*sc);c.height=Math.round(img.height*sc);
+    c.getContext('2d').drawImage(img,0,0,c.width,c.height);P().photo=c.toDataURL('image/jpeg',.85);P().photoX=50;P().photoY=35;touch();renderProfile();refresh();const a=$('#adj');if(a)a.hidden=false};img.src=fr.result};
+  fr.readAsDataURL(file)}
+
+/* ---------- boot ---------- */
+const topBar=$('#top');const setBar=()=>document.documentElement.style.setProperty('--bar',topBar.offsetHeight+'px');
+try{new ResizeObserver(setBar).observe(topBar)}catch(e){}setBar();
+if(!cur()&&S.leads[0])S.active=S.leads[0].id;
+renderCarrierList();setPane('script');renderAll();if(S.view==='profile')renderProfile();
+setInterval(()=>{const L=cur();if(L&&isFE(L)&&S.view==='dialer'){const c=$('#sec-pre [data-calc]');if(c){c._h=null;refresh()}}},60000);
+</script>

@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #F6F8FB;
+  --surface: #ffffff;
+  --surface-2: #f0f4f9;
+  --ink: #14202B;
+  --muted: #5a6676;
+  --rule: #d9dfe6;
+  
+  /* Brand Tokens */
+  --accent: #19388B;
+  --accent-soft: #e5eafa;
+  --accent-ink: #ffffff;
+  --action: #FF701F;
+  --action-soft: #fff0e6;
+  --action-ink: #ffffff;
+  --sky: #5CA5FC;
+  --slate: #9BADBE;
+  
+  /* Status Colors */
+  --ok: #16724a;
+  --ok-soft: #e1f2e8;
+  --warn: #9a5800;
+  --warn-soft: #fbefd9;
+  --bad: #b0261b;
+  --bad-soft: #fbe5e2;
+  --fe: #7a3f8f;
+  --fe-soft: #f2e7f6;
+  
+  /* Fonts */
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  
+  --bar: 64px;
+  --r: 8px;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0D1217;
+  --surface: #151c23;
+  --surface-2: #1a232c;
+  --ink: #e4e9ef;
+  --muted: #95a1b0;
+  --rule: #2a3541;
+  
+  --accent: #8ea8ff;
+  --accent-soft: #1d2849;
+  --accent-ink: #0d1217;
+  --action: #FF701F;
+  --action-soft: #381f12;
+  --action-ink: #ffffff;
+  --sky: #5CA5FC;
+  --slate: #9BADBE;
+  
+  --ok: #62d29b;
+  --ok-soft: #12301f;
+  --warn: #f1b65c;
+  --warn-soft: #382811;
+  --bad: #ff8b80;
+  --bad-soft: #3c1714;
+  --fe: #d7a6ea;
+  --fe-soft: #2e1d37;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 15px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--f-display);
+  letter-spacing: -0.01em;
+}
+
+.font-display {
+  font-family: var(--f-display);
+}
+
+.font-body {
+  font-family: var(--f-body);
+}
+
+.font-mono {
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.num {
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
