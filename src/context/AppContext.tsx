@@ -16,20 +16,24 @@ import {
   SMSMessage,
   CallDispositionPayload
 } from '../types';
-import {
-  DEF_SET,
-  blankProfile,
-  ANDREW_PROFILE,
-  sampleFELead,
-  sampleMortgageLeads,
-  STATUS_L,
-  STAGE_I,
-  STAGES
-} from '../constants/data';
+import { DEF_SET, blankProfile, STATUS_L } from '../constants/data';
 import { weekKey } from '../utils/calculations';
+import { authHeaders as apiHeaders, getIdToken, signInWithGoogle, signOut, watchAuth, firebaseConfigError } from '../lib/firebase';
+import { connectToLead, destroyDevice, getDevice, onIncomingCall, type Call } from '../lib/voice';
 
-const STORAGE_KEY = 'mpCallDesk.v1';
-const AUTH_KEY = 'est8_calldesk_user';
+/** Monday 00:00 local time, for the weekly goals. */
+function weekStart(now = new Date()) {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d.getTime();
+}
+const DIAL_KINDS = new Set(['call', 'na', 'vm', 'talk']);
+
+export interface IncomingCallInfo {
+  from: string;
+  leadId: string | null;
+  leadName: string;
+}
 
 interface AppContextType {
   user: AuthUser | null;
@@ -62,6 +66,8 @@ interface AppContextType {
   phoneNumbers: UserPhoneNumber[];
   telephonyConfig: TelephonyConfig;
   activeCall: ActiveCall | null;
+  callError: string | null;
+  incomingCall: IncomingCallInfo | null;
   a2pRegistration: A2PRegistration | null;
 
   // Actions
@@ -112,36 +118,23 @@ interface AppContextType {
   endCall: () => void;
   toggleMute: () => void;
   toggleHold: () => void;
+  sendDigits: (digits: string) => void;
+  answerIncoming: () => void;
+  declineIncoming: () => void;
+  dismissCallError: () => void;
   sendSms: (leadId: string, to: string, text: string) => Promise<void>;
   sendLeadSms: (leadId: string, to: string, text: string) => Promise<{ success: boolean; isTrialNotice?: boolean; trialNoticeMessage?: string }>;
   fetchLeadMessages: (leadId: string) => Promise<SMSMessage[]>;
-  simulateInboundSms: (leadId: string, body: string) => Promise<void>;
   logCallDisposition: (payload: CallDispositionPayload) => Promise<void>;
-  submitA2PRegistration: (data: any) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Auth state
-  const [user, setUser] = useState<AuthUser | null>(() => {
-    try {
-      const stored = localStorage.getItem(AUTH_KEY);
-      if (stored) return JSON.parse(stored);
-    } catch (e) {}
-    return {
-      id: 'user_admin_aurek',
-      email: 'aurek97@gmail.com',
-      name: 'Andrew Chavis',
-      picture: '',
-      role: 'admin',
-      isVerified: true,
-      phone: '(803) 555-0142',
-      npn: '19482015'
-    };
-  });
+  const [user, setUser] = useState<AuthUser | null>(null);
 
-  const [isVerified, setIsVerified] = useState<boolean>(true);
+  const [isVerified, setIsVerified] = useState<boolean>(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
 
@@ -153,12 +146,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [phoneNumbers, setPhoneNumbers] = useState<UserPhoneNumber[]>([]);
   const [telephonyConfig, setTelephonyConfig] = useState<TelephonyConfig>({
     callingMode: 'webrtc',
-    bridgePhone: '(803) 555-0142',
-    primaryCallerId: '+18035550142',
+    bridgePhone: '',
+    primaryCallerId: '',
     autoLogCall: true,
     recordCalls: false
   });
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  const [callError, setCallError] = useState<string | null>(null);
+  const [incomingCall, setIncomingCall] = useState<IncomingCallInfo | null>(null);
+  const liveCallRef = React.useRef<Call | null>(null);
+  const incomingRef = React.useRef<Call | null>(null);
   const [a2pRegistration, setA2pRegistration] = useState<A2PRegistration | null>(null);
 
   // Theme state
@@ -171,17 +168,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // App settings & profile
   const [settings, setSettings] = useState<Settings>(DEF_SET);
-  const [profile, setProfile] = useState<AgentProfile>(ANDREW_PROFILE);
-  const [stats, setStats] = useState<WeeklyStats>({
-    week: weekKey(),
-    dials: 137,
-    appts: 6,
-    apps: 2
-  });
+  const [profile, setProfile] = useState<AgentProfile>(blankProfile());
 
   // Leads
-  const [leads, setLeads] = useState<Lead[]>(() => [sampleFELead(), ...sampleMortgageLeads()]);
-  const [activeId, setActiveIdState] = useState<string | null>('s4');
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [activeId, setActiveIdState] = useState<string | null>(null);
+
+  // Weekly goals, counted from real activity (resets every Monday).
+  const stats = React.useMemo<WeeklyStats>(() => {
+    const since = weekStart();
+    let dials = 0, appts = 0, apps = 0;
+    for (const l of leads) {
+      for (const e of l.log || []) if (e.t >= since && DIAL_KINDS.has(e.k)) dials++;
+      if ((l.stageAt?.appt || 0) >= since) appts++;
+      if ((l.stageAt?.app || 0) >= since) apps++;
+    }
+    return { week: weekKey(), dials, appts, apps };
+  }, [leads]);
   const [view, setViewState] = useState<'dialer' | 'pipeline' | 'profile' | 'team'>('dialer');
   const [mobilePane, setMobilePane] = useState<'leads' | 'script' | 'card'>('script');
 
@@ -197,15 +200,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [trialNotice, setTrialNotice] = useState<string | null>(null);
 
   // Helper for authenticated API calls
-  const authHeaders = useCallback(() => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    };
-    if (user?.email) {
-      headers['x-user-email'] = user.email.toLowerCase().trim();
-    }
-    return headers;
-  }, [user]);
+  const authHeaders = useCallback(() => apiHeaders(), [user]);
 
   // Telephony data fetcher (numbers, config, A2P status)
   const fetchTelephonyData = useCallback(async () => {
@@ -234,47 +229,36 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [user, isVerified, authHeaders]);
 
-  // Check auth and load isolated data from SQLite backend
+  // Ask the server who this Google account is (invite-only).
   const checkAuthStatus = useCallback(async () => {
-    if (!user?.email) {
-      setIsVerified(false);
-      setIsLoadingAuth(false);
-      return;
-    }
-
     setIsLoadingAuth(true);
     try {
-      const res = await fetch(`/api/auth/me?email=${encodeURIComponent(user.email.toLowerCase().trim())}`);
+      const token = await getIdToken();
+      if (!token) {
+        setUser(null);
+        setIsVerified(false);
+        setVerificationError(firebaseConfigError() || null);
+        return;
+      }
+      const res = await fetch('/api/auth/me', { headers: apiHeaders(false) });
       const data = await res.json();
-
-      if (data.authenticated && data.isVerified) {
+      if (data.authenticated && data.isVerified && data.user) {
         setIsVerified(true);
         setVerificationError(null);
-        if (data.user) {
-          setUser(prev => ({
-            ...prev,
-            ...data.user,
-            isVerified: true
-          }));
-          if (data.user.profile) {
-            setProfile(prev => ({ ...prev, ...data.user.profile }));
-          }
-          if (data.user.settings) {
-            setSettings(prev => ({ ...prev, ...data.user.settings }));
-          }
-        }
+        setUser({ ...data.user, isVerified: true });
+        setProfile({ ...blankProfile(), ...(data.user.profile || {}) });
+        if (data.user.settings) setSettings(prev => ({ ...prev, ...data.user.settings }));
       } else {
         setIsVerified(false);
-        setVerificationError(data.message || 'Access restricted: User is not authorized.');
+        setVerificationError(data.message || 'This account doesn’t have access to EST8 CallDesk.');
       }
     } catch (e) {
-      if (user.email.toLowerCase() === 'aurek97@gmail.com') {
-        setIsVerified(true);
-      }
+      setIsVerified(false);
+      setVerificationError('Couldn’t reach the CallDesk server. Check your connection and try again.');
     } finally {
       setIsLoadingAuth(false);
     }
-  }, [user?.email]);
+  }, []);
 
   // Load team users if Admin
   const fetchTeamUsers = useCallback(async () => {
@@ -312,23 +296,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [user, isVerified, viewingUserId, activeId, authHeaders]);
 
+  // Follow the Google sign-in state.
   useEffect(() => {
-    checkAuthStatus();
+    let unsub: () => void = () => {};
+    watchAuth(u => {
+      if (!u) {
+        setUser(null);
+        setIsVerified(false);
+        setLeads([]);
+        setVerificationError(firebaseConfigError() || null);
+        setIsLoadingAuth(false);
+        return;
+      }
+      setUser(prev => prev && prev.email === (u.email || '').toLowerCase() ? prev : {
+        id: '', email: (u.email || '').toLowerCase(), name: u.displayName || '', picture: u.photoURL || '', role: 'agent', isVerified: false
+      });
+      checkAuthStatus();
+    }).then(fn => { unsub = fn; });
+    return () => unsub();
   }, [checkAuthStatus]);
 
   useEffect(() => {
-    if (isVerified && user) {
+    if (isVerified && user?.id) {
       fetchLeads();
       fetchTelephonyData();
       if (user.role === 'admin') {
         fetchTeamUsers();
       }
     }
-  }, [isVerified, user, viewingUserId, fetchLeads, fetchTelephonyData, fetchTeamUsers]);
+  }, [isVerified, user?.id, user?.role, viewingUserId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Active call duration timer ticker
   useEffect(() => {
-    if (!activeCall || activeCall.status === 'completed' || activeCall.status === 'failed') return;
+    if (!activeCall || activeCall.status !== 'connected') return;
     const interval = setInterval(() => {
       setActiveCall(prev => (prev ? { ...prev, durationSeconds: prev.durationSeconds + 1 } : null));
     }, 1000);
@@ -344,57 +344,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setTheme(prev => (prev === 'light' ? 'dark' : 'light'));
   }, []);
 
-  const loginWithGoogle = useCallback(async (customUser?: Partial<AuthUser>) => {
-    const targetEmail = (customUser?.email || 'aurek97@gmail.com').toLowerCase().trim();
-    setIsLoadingAuth(true);
-
+  const loginWithGoogle = useCallback(async (_customUser?: Partial<AuthUser>) => {
+    setVerificationError(null);
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: targetEmail })
-      });
-      const data = await res.json();
-
-      if (res.ok && data.user) {
-        setUser(data.user);
-        setIsVerified(true);
-        setVerificationError(null);
-        setViewingUserId(null);
-        try {
-          localStorage.setItem(AUTH_KEY, JSON.stringify(data.user));
-        } catch (e) {}
-        setIsLoginOpen(false);
-      } else {
-        const unverifiedUser: AuthUser = {
-          id: 'unverified_' + Math.random().toString(36).slice(2, 8),
-          email: targetEmail,
-          name: customUser?.name || targetEmail.split('@')[0],
-          role: 'agent',
-          isVerified: false
-        };
-        setUser(unverifiedUser);
-        setIsVerified(false);
-        setVerificationError(data.message || 'Access Denied: You are not an authorized CRM user.');
-        setIsLoginOpen(false);
-      }
+      await signInWithGoogle();
+      setIsLoginOpen(false);
     } catch (e) {
-      setIsVerified(false);
-      setVerificationError('Unable to connect to CRM verification server.');
-    } finally {
-      setIsLoadingAuth(false);
+      const code = (e as { code?: string }).code || '';
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return;
+      setVerificationError(
+        code === 'auth/popup-blocked' ? 'Your browser blocked the Google sign-in window. Allow pop-ups for this site and try again.'
+        : code === 'auth/unauthorized-domain' ? 'This web address isn’t on the Firebase sign-in list yet. Add it under Firebase → Authentication → Settings → Authorized domains.'
+        : (e as Error).message || 'Google sign-in failed. Try again.'
+      );
     }
   }, []);
 
   const logout = useCallback(() => {
-    setUser(null);
-    setIsVerified(false);
-    setVerificationError(null);
-    setViewingUserId(null);
+    liveCallRef.current?.disconnect();
+    destroyDevice();
     setActiveCall(null);
-    try {
-      localStorage.removeItem(AUTH_KEY);
-    } catch (e) {}
+    setViewingUserId(null);
+    setLeads([]);
+    setProfile(blankProfile());
+    signOut().catch(() => {});
   }, []);
 
   const switchUserView = useCallback((userId: string | null) => {
@@ -514,88 +487,154 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     [telephonyConfig, authHeaders]
   );
 
-  // Telephony: Start Outbound Call
+  // Telephony: Start Outbound Call (browser) or Cell Bridge (Twilio rings your cell first)
   const startCall = useCallback(
     async (lead: Lead) => {
-      const leadPhone = lead.phone || '';
-      if (!leadPhone) {
-        alert('This lead does not have a valid phone number to dial.');
+      if (activeCall || liveCallRef.current) return;
+      if (!lead.phone) {
+        setCallError('This lead doesn’t have a phone number.');
+        return;
+      }
+      setCallError(null);
+      const mode = telephonyConfig.callingMode;
+      const leadName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Client';
+      const callerId = phoneNumbers.find(p => p.isPrimary)?.phoneNumber || telephonyConfig.primaryCallerId || '';
+      const base: ActiveCall = {
+        callId: `pending_${Date.now()}`, leadId: lead.id, leadName, leadPhone: lead.phone, callerId, mode,
+        status: 'initiating', startTime: Date.now(), durationSeconds: 0, isMuted: false, isOnHold: false
+      };
+      setActiveCall(base);
+
+      if (mode === 'bridge') {
+        try {
+          const res = await fetch('/api/telephony/call', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ leadId: lead.id }) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Couldn’t start the call.');
+          setCallError(data.message || null);
+          setActiveCall(null);
+          setTimeout(() => fetchLeads(), 4000);
+        } catch (err) {
+          setCallError((err as Error).message);
+          setActiveCall(null);
+        }
         return;
       }
 
-      const primaryNum = phoneNumbers.find(p => p.isPrimary)?.phoneNumber || telephonyConfig.primaryCallerId || '+18035550142';
-      const mode = telephonyConfig.callingMode;
-
-      const callId = `CA_${Date.now()}`;
-      setActiveCall({
-        callId,
-        leadId: lead.id,
-        leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Client',
-        leadPhone,
-        callerId: primaryNum,
-        mode,
-        status: 'initiating',
-        startTime: Date.now(),
-        durationSeconds: 0,
-        isMuted: false,
-        isOnHold: false
-      });
-
-      // Increment stats
-      setStats(prev => ({ ...prev, dials: prev.dials + 1 }));
-
       try {
-        const res = await fetch('/api/telephony/call', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify({
-            leadId: lead.id,
-            leadPhone,
-            callerId: primaryNum,
-            mode,
-            leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim()
-          })
+        const call = await connectToLead(lead.id, lead.phone);
+        liveCallRef.current = call;
+        call.on('ringing', () => setActiveCall(prev => (prev ? { ...prev, status: 'ringing' } : prev)));
+        // answerOnBridge: "accept" fires when the lead actually picks up.
+        call.on('accept', (c: Call) =>
+          setActiveCall(prev => (prev ? { ...prev, status: 'connected', callId: c.parameters?.CallSid || prev.callId, startTime: Date.now(), durationSeconds: 0 } : prev))
+        );
+        const finish = () => {
+          liveCallRef.current = null;
+          setActiveCall(prev => (prev ? { ...prev, status: 'completed' } : prev));
+          setTimeout(() => setActiveCall(null), 1200);
+          setTimeout(() => fetchLeads(), 2500); // the server logs the call result
+        };
+        call.on('disconnect', finish);
+        call.on('cancel', finish);
+        call.on('reject', finish);
+        call.on('error', (e: { message?: string }) => {
+          setCallError(e?.message || 'The call failed.');
+          finish();
         });
-
-        if (res.ok) {
-          // Transition to connected after brief ring
-          setTimeout(() => {
-            setActiveCall(prev => (prev ? { ...prev, status: 'connected' } : null));
-          }, 1500);
-          fetchLeads();
-        } else {
-          setActiveCall(prev => (prev ? { ...prev, status: 'failed' } : null));
-        }
       } catch (err) {
-        console.error('Failed to initiate call:', err);
-        setActiveCall(prev => (prev ? { ...prev, status: 'failed' } : null));
+        const msg = (err as Error).message || 'Couldn’t start the call.';
+        setCallError(/permission|NotAllowed/i.test(msg) ? 'Microphone is blocked. Allow it in your browser, then call again.' : msg);
+        setActiveCall(null);
       }
     },
-    [phoneNumbers, telephonyConfig, authHeaders, fetchLeads]
+    [activeCall, phoneNumbers, telephonyConfig, authHeaders, fetchLeads]
   );
 
   const endCall = useCallback(() => {
-    if (activeCall) {
-      setActiveCall(prev => (prev ? { ...prev, status: 'completed' } : null));
-      setTimeout(() => {
-        setActiveCall(null);
-      }, 1200);
+    const call = liveCallRef.current;
+    if (call) {
+      call.disconnect();
+      return;
     }
-  }, [activeCall]);
+    setActiveCall(null);
+  }, []);
 
   const toggleMute = useCallback(() => {
-    setActiveCall(prev => (prev ? { ...prev, isMuted: !prev.isMuted } : null));
+    const call = liveCallRef.current;
+    if (!call) return;
+    call.mute(!call.isMuted());
+    setActiveCall(prev => (prev ? { ...prev, isMuted: call.isMuted() } : null));
   }, []);
 
-  const toggleHold = useCallback(() => {
-    setActiveCall(prev => (prev ? { ...prev, isOnHold: !prev.isOnHold } : null));
+  // Hold needs a conference bridge; mute is the supported way to pause audio for now.
+  const toggleHold = useCallback(() => {}, []);
+
+  const sendDigits = useCallback((d: string) => {
+    liveCallRef.current?.sendDigits(d);
   }, []);
+
+  // Incoming calls to your numbers ring here while CallDesk is open.
+  useEffect(() => {
+    if (!isVerified || !user?.id || phoneNumbers.length === 0) return;
+    onIncomingCall(call => {
+      if (liveCallRef.current || incomingRef.current) {
+        call.reject();
+        return;
+      }
+      incomingRef.current = call;
+      const from = call.parameters?.From || '';
+      const d = from.replace(/\D/g, '').slice(-10);
+      const match = leads.find(l => (l.phone || '').replace(/\D/g, '').slice(-10) === d);
+      setIncomingCall({ from, leadId: match?.id || null, leadName: match ? `${match.firstName || ''} ${match.lastName || ''}`.trim() : '' });
+      const clear = () => {
+        if (incomingRef.current === call) incomingRef.current = null;
+        setIncomingCall(null);
+      };
+      call.on('cancel', clear);
+      call.on('disconnect', clear);
+      call.on('reject', clear);
+    });
+    getDevice(true).catch(err => console.warn('[Voice] incoming calls unavailable:', (err as Error).message));
+    return () => onIncomingCall(null);
+  }, [isVerified, user?.id, phoneNumbers.length, leads]);
+
+  const answerIncoming = useCallback(() => {
+    const call = incomingRef.current;
+    if (!call) return;
+    incomingRef.current = null;
+    const info = incomingCall;
+    setIncomingCall(null);
+    liveCallRef.current = call;
+    call.accept();
+    if (info?.leadId) setActiveIdState(info.leadId);
+    setActiveCall({
+      callId: call.parameters?.CallSid || `in_${Date.now()}`, leadId: info?.leadId || '', leadName: info?.leadName || 'Incoming caller',
+      leadPhone: info?.from || '', callerId: 'Incoming', mode: 'webrtc', status: 'connected', startTime: Date.now(),
+      durationSeconds: 0, isMuted: false, isOnHold: false
+    });
+    const finish = () => {
+      liveCallRef.current = null;
+      setActiveCall(null);
+      setTimeout(() => fetchLeads(), 2000);
+    };
+    call.on('disconnect', finish);
+    call.on('error', finish);
+  }, [incomingCall, fetchLeads]);
+
+  const declineIncoming = useCallback(() => {
+    incomingRef.current?.reject();
+    incomingRef.current = null;
+    setIncomingCall(null);
+  }, []);
+
+  const dismissCallError = useCallback(() => setCallError(null), []);
 
   // Telephony: Fetch lead messages
   const fetchLeadMessages = useCallback(async (leadId: string) => {
     if (!leadId) return [];
     try {
-      const res = await fetch(`/api/telephony/sms/messages?leadId=${encodeURIComponent(leadId)}`, {
+      const asUser = viewingUserId ? `&as_user_id=${encodeURIComponent(viewingUserId)}` : '';
+      const res = await fetch(`/api/telephony/sms/messages?leadId=${encodeURIComponent(leadId)}${asUser}`, {
         headers: authHeaders()
       });
       if (res.ok) {
@@ -607,21 +646,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       console.error('Failed to load lead SMS messages:', e);
     }
     return [];
-  }, [authHeaders]);
+  }, [authHeaders, viewingUserId]);
 
   // Telephony: Send 10DLC SMS with Twilio Trial handling
   const sendLeadSms = useCallback(
     async (leadId: string, to: string, text: string) => {
-      const primaryNum = phoneNumbers.find(p => p.isPrimary)?.phoneNumber || telephonyConfig.primaryCallerId || '+18035550142';
       const res = await fetch('/api/telephony/sms', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({
-          leadId,
-          to,
-          from: primaryNum,
-          body: text
-        })
+        body: JSON.stringify({ leadId, body: text })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -634,7 +667,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await fetchLeads();
       return data;
     },
-    [phoneNumbers, telephonyConfig, authHeaders, fetchLeads, fetchLeadMessages]
+    [authHeaders, fetchLeads, fetchLeadMessages]
   );
 
   const sendSms = useCallback(
@@ -642,22 +675,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await sendLeadSms(leadId, to, text);
     },
     [sendLeadSms]
-  );
-
-  // Telephony: Simulate Inbound SMS
-  const simulateInboundSms = useCallback(
-    async (leadId: string, body: string) => {
-      const res = await fetch('/api/telephony/sms/simulate-inbound', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ leadId, body })
-      });
-      if (res.ok) {
-        await fetchLeadMessages(leadId);
-        await fetchLeads();
-      }
-    },
-    [authHeaders, fetchLeadMessages, fetchLeads]
   );
 
   // Telephony: Call Disposition Logging
@@ -678,23 +695,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const dismissTrialNotice = useCallback(() => {
     setTrialNotice(null);
   }, []);
-
-  // Telephony: A2P Submission
-  const submitA2PRegistration = useCallback(
-    async (data: any) => {
-      const res = await fetch('/api/telephony/a2p', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify(data)
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to submit A2P application');
-      }
-      await fetchTelephonyData();
-    },
-    [authHeaders, fetchTelephonyData]
-  );
 
   const setActiveLead = useCallback((id: string | null) => {
     setActiveIdState(id);
@@ -833,11 +833,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return next;
       });
 
-      if (nextStage === 'appt') {
-        setStats(prev => ({ ...prev, appts: prev.appts + 1 }));
-      } else if (nextStage === 'app') {
-        setStats(prev => ({ ...prev, apps: prev.apps + 1 }));
-      }
     },
     [authHeaders, viewingUserId]
   );
@@ -876,9 +871,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         return next;
       });
 
-      if (outcome !== 'text') {
-        setStats(prev => ({ ...prev, dials: prev.dials + 1 }));
-      }
     },
     [authHeaders, viewingUserId]
   );
@@ -1048,6 +1040,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         phoneNumbers,
         telephonyConfig,
         activeCall,
+        callError,
+        incomingCall,
         a2pRegistration,
         loginWithGoogle,
         logout,
@@ -1094,12 +1088,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         endCall,
         toggleMute,
         toggleHold,
+        sendDigits,
+        answerIncoming,
+        declineIncoming,
+        dismissCallError,
         sendSms,
         sendLeadSms,
         fetchLeadMessages,
-        simulateInboundSms,
-        logCallDisposition,
-        submitA2PRegistration
+        logCallDisposition
       }}
     >
       {children}

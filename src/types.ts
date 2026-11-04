@@ -328,8 +328,8 @@ export interface SMSMessage {
   fromNumber: string;
   toNumber: string;
   body: string;
-  status: 'delivered' | 'received' | 'simulated' | 'failed';
-  isTrialSimulated?: boolean;
+  /** Twilio's message status: queued, sending, sent, delivered, undelivered, failed; inbound texts are "received". */
+  status: 'queued' | 'sending' | 'sent' | 'delivered' | 'undelivered' | 'failed' | 'received';
   createdAt: number;
 }
 

@@ -40,7 +40,8 @@ export const Header: React.FC = () => {
     teamUsers,
     phoneNumbers,
     setIsNumberMarketplaceOpen,
-    setIsA2POpen
+    setIsA2POpen,
+    a2pRegistration
   } = useApp();
 
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -352,11 +353,11 @@ export const Header: React.FC = () => {
               type="button"
               onClick={() => setIsA2POpen(true)}
               className="px-2.5 py-1.5 rounded-lg border border-[var(--rule)] text-xs text-[var(--ink)] hover:border-blue-500 hover:text-blue-500 hover:bg-[var(--surface-2)] transition-colors flex items-center gap-1.5"
-              title="A2P 10DLC Brand & Campaign Verification"
+              title={`Texting registration (A2P 10DLC): ${a2pRegistration?.status === 'approved' ? 'approved' : a2pRegistration ? 'not approved yet' : 'not registered'}`}
             >
               <ShieldCheck className="w-3.5 h-3.5 text-blue-500" />
               <span className="hidden md:inline">A2P 10DLC</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className={`w-1.5 h-1.5 rounded-full ${a2pRegistration?.status === 'approved' ? 'bg-emerald-500' : a2pRegistration?.status === 'rejected' ? 'bg-red-500' : 'bg-amber-500'}`} />
             </button>
 
             {/* Settings Button */}
