@@ -122,53 +122,8 @@ export function blankProfile(): AgentProfile {
   };
 }
 
-export const ANDREW_PROFILE: AgentProfile = {
-  name: 'Andrew Chavis',
-  role: 'Agent',
-  phone: '(803) 873-4019',
-  email: 'andrew.chavissfg@gmail.com',
-  booking: '',
-  imo: 'Symmetry Financial Group (SFG)',
-  callAgency: 'EST8 Financial',
-  callPhone: '(361) 761-0910',
-  qpMp: 'https://20009a4c1a8eb5e9.quoteplicity.com/quote/no-exam',
-  qpFe: '',
-  qpContact: 'no',
-  photo: '',
-  photoX: 50,
-  photoY: 35,
-  npn: '21644305',
-  states: [
-    { id: 'st-mi', st: 'MI', num: '21644305', home: false, exp: '' },
-    { id: 'st-oh', st: 'OH', num: '1735870', home: false, exp: '' },
-    { id: 'st-sc', st: 'SC', num: '21644305', home: false, exp: '' },
-    { id: 'st-tx', st: 'TX', num: '3357586', home: true, exp: '' },
-    { id: 'st-va', st: 'VA', num: '1580090', home: false, exp: '' }
-  ],
-  writing: [
-    { id: 'w1', carrier: 'American General', num: '1QUPQ', status: 'Appointed' },
-    { id: 'w2', carrier: 'Americo', num: 'DPAAW2', status: 'Appointed' },
-    { id: 'w3', carrier: 'Banner Life (BeyondTerm)', num: 'ASU12239', status: 'Appointed' },
-    { id: 'w4', carrier: 'Fidelity and Guaranty', num: '000784282', status: 'Appointed' },
-    { id: 'w5', carrier: 'Legal & General America (Obsolete)', num: 'ASU12239', status: 'Inactive' },
-    { id: 'w6', carrier: 'Liberty Bankers', num: 'LBL84766WL', status: 'Appointed' },
-    { id: 'w7', carrier: 'Mutual of Omaha', num: '1241690', status: 'Appointed' },
-    { id: 'w8', carrier: 'Occidental', num: '0007047433', status: 'Appointed' },
-    { id: 'w9', carrier: 'SBLI', num: '132829', status: 'Appointed' },
-    { id: 'w10', carrier: 'SBLI', num: '154425', status: 'Appointed' },
-    { id: 'w11', carrier: 'Transamerica', num: '0097175119', status: 'Appointed' },
-    { id: 'w12', carrier: 'United Home Life', num: 'L000262928', status: 'Appointed' }
-  ],
-  dob: '',
-  dl: '',
-  dlState: 'TX',
-  aml: 'SuranceBay, LLC.',
-  amlDate: '2026-10-05',
-  eo: 'Next Insurance US Company',
-  eoPolicy: 'NXTPWFKTQ3-00-PL',
-  eoCert: '083312270',
-  eoExp: '2027-06-08'
-};
+// Agent details live in each user's Profile (stored on the server), never in this public code.
+export const ANDREW_PROFILE: AgentProfile = blankProfile();
 
 export function sampleFELead(): Lead {
   const d = new Date(Date.now() - 26 * 3600000);

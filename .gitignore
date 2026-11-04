@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local databases and test output — never commit lead data
+data/
+*.sqlite
+*.sqlite-*
+*.db

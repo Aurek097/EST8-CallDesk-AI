@@ -1,309 +1,160 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import {
-  ShieldCheck,
-  CheckCircle2,
-  Clock,
-  AlertCircle,
-  FileText,
-  Building,
-  Send,
-  Sparkles,
-  Lock,
-  X,
-  ExternalLink,
-  ChevronRight,
-  HelpCircle
-} from 'lucide-react';
+import { authHeaders } from '../lib/firebase';
+import { ShieldCheck, CheckCircle2, Clock, AlertCircle, ExternalLink, RefreshCw } from 'lucide-react';
+import type { A2PRegistration } from '../types';
 
+interface A2PStatus {
+  configured: boolean;
+  registered: boolean;
+  registration: A2PRegistration | null;
+  error?: string;
+}
+
+const CONSOLE = {
+  compliance: 'https://console.twilio.com/us1/develop/sms/regulatory-compliance/a2p-10dlc-overview',
+  services: 'https://console.twilio.com/us1/develop/sms/services',
+  guide: 'https://www.twilio.com/docs/messaging/compliance/a2p-10dlc',
+};
+
+const STATUS_COPY: Record<string, { label: string; tone: 'good' | 'warn' | 'bad'; text: string }> = {
+  approved: { label: 'Approved', tone: 'good', text: 'Your campaign is approved. Texts to leads go out on your registered numbers.' },
+  in_review: { label: 'In carrier review', tone: 'warn', text: 'Twilio and the carriers are reviewing your campaign. This usually takes several business days. Texts may be blocked until it is approved.' },
+  pending: { label: 'Submitted', tone: 'warn', text: 'Your campaign was submitted and is waiting for review.' },
+  rejected: { label: 'Rejected', tone: 'bad', text: 'The campaign was rejected. Read the carrier feedback below, fix it in the Twilio Console, and resubmit.' },
+};
+
+const toneClass = {
+  good: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+  warn: 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/30',
+  bad: 'bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30',
+};
+
+/** A2P 10DLC status, read live from Twilio. Registration itself happens in the Twilio Console. */
 export const A2PRegistrationModal: React.FC = () => {
-  const { isA2POpen, setIsA2POpen, a2pRegistration, submitA2PRegistration, user } = useApp();
+  const { isA2POpen, setIsA2POpen } = useApp();
+  const [data, setData] = useState<A2PStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
-  const [step, setStep] = useState<number>(1);
-  const [businessName, setBusinessName] = useState(a2pRegistration?.businessName || 'EST8 Financial Group LLC');
-  const [ein, setEin] = useState(a2pRegistration?.ein || '84-9201948');
-  const [businessType, setBusinessType] = useState<'llc' | 'corporation' | 'sole_proprietorship'>(
-    a2pRegistration?.businessType || 'llc'
-  );
-  const [brandType, setBrandType] = useState<'STANDARD' | 'SOLE_PROPRIETOR'>('STANDARD');
-  const [campaignUseCase, setCampaignUseCase] = useState(
-    a2pRegistration?.campaignUseCase || 'Mortgage Protection & Final Expense Customer Care & Appointment Follow-up'
-  );
-  const [sampleMessage1, setSampleMessage1] = useState(
-    a2pRegistration?.sampleMessage1 ||
-      'Hi Marcus, this is Andrew Chavis with EST8 Financial Group following up on your mortgage protection request for your home in Columbia. When is a good time for a brief 5-min review? Reply STOP to cancel.'
-  );
-  const [sampleMessage2, setSampleMessage2] = useState(
-    a2pRegistration?.sampleMessage2 ||
-      'Hi David, Andrew Chavis here with EST8 Financial. I have the updated carrier rate comparisons ready for your review. Let me know if you are free around 2pm or 4pm today.'
-  );
-  const [optInKeywords, setOptInKeywords] = useState(a2pRegistration?.optInKeywords || 'START, YES, AGREE');
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
+    try {
+      const res = await fetch('/api/telephony/a2p', { headers: authHeaders() });
+      if (!res.ok) throw new Error(`Couldn't load the status (error ${res.status}).`);
+      setData(await res.json());
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitSuccess, setSubmitSuccess] = useState(false);
+  useEffect(() => {
+    if (isA2POpen) load();
+  }, [isA2POpen, load]);
 
   if (!isA2POpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    try {
-      await submitA2PRegistration({
-        businessName,
-        ein,
-        businessType,
-        brandType,
-        campaignUseCase,
-        sampleMessage1,
-        sampleMessage2,
-        optInKeywords
-      });
-      setSubmitSuccess(true);
-      setTimeout(() => {
-        setSubmitSuccess(false);
-      }, 3000);
-    } catch (err: any) {
-      alert(err.message || 'Submission failed');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const isApproved = a2pRegistration?.status === 'approved';
-  const isInReview = a2pRegistration?.status === 'in_review' || a2pRegistration?.status === 'pending';
+  const reg = data?.registration ?? null;
+  const status = reg ? STATUS_COPY[reg.status] ?? STATUS_COPY.pending : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Header */}
-        <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70" role="dialog" aria-modal="true" aria-labelledby="a2p-title">
+      <div className="w-full max-w-2xl bg-[var(--surface)] text-[var(--ink)] border border-[var(--rule)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+        <div className="p-5 border-b border-[var(--rule)] flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="font-bold text-slate-100 text-lg">A2P 10DLC Brand & Campaign Verification</h2>
-                {isApproved && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" /> VERIFIED 100%
-                  </span>
-                )}
-                {isInReview && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> CARRIER IN REVIEW
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-slate-400">Carrier registration portal for US mobile network SMS & voice compliance</p>
+              <h2 id="a2p-title" className="font-bold text-lg">Texting registration (A2P 10DLC)</h2>
+              <p className="text-sm text-[var(--muted)]">
+                U.S. carriers block business texts from local numbers until your business and texting campaign are registered. Calling doesn't need this.
+              </p>
             </div>
           </div>
-          <button
-            onClick={() => setIsA2POpen(false)}
-            className="text-slate-400 hover:text-slate-200 text-2xl leading-none p-1"
-          >
+          <button type="button" onClick={() => setIsA2POpen(false)} className="text-[var(--muted)] hover:text-[var(--ink)] text-2xl leading-none p-1" aria-label="Close">
             &times;
           </button>
         </div>
 
-        {/* Live Stepper Tracker */}
-        <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800">
-          <div className="grid grid-cols-4 gap-2 text-center">
-            <div className="flex flex-col items-center">
-              <div className="w-7 h-7 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center text-xs font-bold mb-1">
-                ✓
-              </div>
-              <span className="text-[11px] font-semibold text-slate-200">1. Brand Identity</span>
-              <span className="text-[10px] text-emerald-400">EIN Verified</span>
-            </div>
-            <div className="flex flex-col items-center">
-              <div className="w-7 h-7 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center text-xs font-bold mb-1">
-                ✓
-              </div>
-              <span className="text-[11px] font-semibold text-slate-200">2. TCR Registry</span>
-              <span className="text-[10px] text-emerald-400">TCR Attested</span>
-            </div>
-            <div className="flex flex-col items-center">
-              <div
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mb-1 ${
-                  isApproved ? 'bg-emerald-500 text-slate-950' : 'bg-amber-500 text-slate-950 animate-pulse'
-                }`}
-              >
-                {isApproved ? '✓' : '3'}
-              </div>
-              <span className="text-[11px] font-semibold text-slate-200">3. Carrier Vetting</span>
-              <span className={`text-[10px] ${isApproved ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {isApproved ? 'Approved' : 'In Review (T-Mobile/AT&T)'}
-              </span>
-            </div>
-            <div className="flex flex-col items-center">
-              <div
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mb-1 ${
-                  isApproved ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-500'
-                }`}
-              >
-                {isApproved ? '✓' : '4'}
-              </div>
-              <span className="text-[11px] font-semibold text-slate-200">4. High Throughput</span>
-              <span className={`text-[10px] ${isApproved ? 'text-emerald-400' : 'text-slate-500'}`}>
-                {isApproved ? 'Active (50 MPS)' : 'Pending Vetting'}
-              </span>
-            </div>
-          </div>
-        </div>
+        <div className="p-5 space-y-4 overflow-y-auto">
+          {loading && <p className="text-sm text-[var(--muted)]">Checking Twilio…</p>}
+          {loadError && (
+            <div className={`p-3 rounded-lg border text-sm ${toneClass.bad}`}>{loadError}</div>
+          )}
 
-        {/* Wizard Form / Content */}
-        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto flex-1 space-y-5 text-xs text-slate-300">
-          {submitSuccess && (
-            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>A2P 10DLC Registration submitted to The Campaign Registry (TCR). Review typically completes in 24-48 hours.</span>
+          {data && !data.configured && (
+            <div className={`p-3 rounded-lg border text-sm flex gap-2 ${toneClass.warn}`}>
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Texting isn't connected yet. Add <code>TWILIO_MESSAGING_SERVICE_SID</code> (starts with MG) in the app's secrets after you create a Messaging Service in Twilio.
+              </span>
             </div>
           )}
 
-          {/* Section 1: Business Entity */}
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-            <div className="flex items-center gap-2 pb-2 border-b border-slate-800/80">
-              <Building className="w-4 h-4 text-blue-400" />
-              <h3 className="font-bold text-slate-100 text-sm">Step 1: Legal Business Entity (Brand)</h3>
+          {data?.error && <div className={`p-3 rounded-lg border text-sm ${toneClass.bad}`}>{data.error}</div>}
+
+          {data?.configured && !data.error && !reg && (
+            <div className={`p-3 rounded-lg border text-sm flex gap-2 ${toneClass.warn}`}>
+              <Clock className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>No campaign is registered on your Messaging Service yet. Follow the steps below.</span>
             </div>
+          )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-400 font-medium mb-1">Legal Business Name *</label>
-                <input
-                  type="text"
-                  required
-                  value={businessName}
-                  onChange={e => setBusinessName(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
-                />
+          {reg && status && (
+            <div className={`p-4 rounded-lg border ${toneClass[status.tone]}`}>
+              <div className="flex items-center gap-2 font-bold">
+                {status.tone === 'good' ? <CheckCircle2 className="w-4 h-4" /> : status.tone === 'warn' ? <Clock className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                {status.label}
               </div>
-
-              <div>
-                <label className="block text-slate-400 font-medium mb-1">Federal Tax ID / EIN *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="XX-XXXXXXX"
-                  value={ein}
-                  onChange={e => setEin(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
-                />
-              </div>
+              <p className="text-sm mt-1">{status.text}</p>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs mt-3 text-[var(--ink)]">
+                {reg.campaignUseCase && (<><dt className="text-[var(--muted)]">Use case</dt><dd>{reg.campaignUseCase}</dd></>)}
+                {reg.campaignSid && (<><dt className="text-[var(--muted)]">Campaign</dt><dd className="font-mono break-all">{reg.campaignSid}</dd></>)}
+                {reg.brandSid && (<><dt className="text-[var(--muted)]">Brand</dt><dd className="font-mono break-all">{reg.brandSid}</dd></>)}
+                {reg.updatedAt && (<><dt className="text-[var(--muted)]">Last update</dt><dd>{new Date(reg.updatedAt).toLocaleString()}</dd></>)}
+              </dl>
+              {reg.carrierFeedback && (
+                <p className="text-xs mt-3 break-words"><strong>Carrier feedback:</strong> {reg.carrierFeedback}</p>
+              )}
             </div>
+          )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-400 font-medium mb-1">Entity Structure</label>
-                <select
-                  value={businessType}
-                  onChange={e => setBusinessType(e.target.value as any)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
-                >
-                  <option value="llc">Limited Liability Company (LLC)</option>
-                  <option value="corporation">Corporation (Inc/Corp)</option>
-                  <option value="sole_proprietorship">Sole Proprietor (SSN)</option>
-                </select>
-              </div>
+          {reg?.status !== 'approved' && (
+            <ol className="space-y-3 text-sm list-decimal pl-5">
+              <li>
+                <strong>Register your brand.</strong> In the Twilio Console, open Messaging → Regulatory Compliance and create a customer profile and brand for EST8 Financial Group. You'll need the business's legal name, EIN and address exactly as the IRS has them. A sole proprietor without an EIN can register as a Sole Proprietor brand instead.
+              </li>
+              <li>
+                <strong>Create a Messaging Service</strong> and add your Twilio numbers to it. Put its SID (MG…) in the app's secrets as <code>TWILIO_MESSAGING_SERVICE_SID</code>.
+              </li>
+              <li>
+                <strong>Register a campaign</strong> on that service. Describe how leads opt in (your lead forms and their consent language), include two sample texts with "Reply STOP to opt out," and list STOP / START as keywords. CallDesk already honors STOP and START replies automatically.
+              </li>
+              <li>
+                <strong>Wait for approval.</strong> This screen reads the status from Twilio each time you open it.
+              </li>
+            </ol>
+          )}
 
-              <div>
-                <label className="block text-slate-400 font-medium mb-1">Registration Tier</label>
-                <select
-                  value={brandType}
-                  onChange={e => setBrandType(e.target.value as any)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
-                >
-                  <option value="STANDARD">Standard Brand (Commercial High-Volume)</option>
-                  <option value="SOLE_PROPRIETOR">Sole Proprietor Brand (Low Volume)</option>
-                </select>
-              </div>
-            </div>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <a href={CONSOLE.compliance} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold">
+              Open A2P registration in Twilio <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+            <a href={CONSOLE.services} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--rule)] text-sm">
+              Messaging Services <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+            <a href={CONSOLE.guide} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--rule)] text-sm">
+              Twilio's A2P guide <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+            <button type="button" onClick={load} disabled={loading} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--rule)] text-sm ml-auto">
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Check again
+            </button>
           </div>
-
-          {/* Section 2: Campaign Use Case */}
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-            <div className="flex items-center gap-2 pb-2 border-b border-slate-800/80">
-              <FileText className="w-4 h-4 text-emerald-400" />
-              <h3 className="font-bold text-slate-100 text-sm">Step 2: Campaign Purpose & Use Case</h3>
-            </div>
-
-            <div>
-              <label className="block text-slate-400 font-medium mb-1">Campaign Description</label>
-              <input
-                type="text"
-                value={campaignUseCase}
-                onChange={e => setCampaignUseCase(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
-              />
-              <span className="text-[11px] text-slate-500 mt-1 block">
-                Declared to mobile carriers (Verizon, AT&T, T-Mobile) to bypass carrier spam filters.
-              </span>
-            </div>
-          </div>
-
-          {/* Section 3: Compliant Message Samples & Opt-In */}
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-            <div className="flex items-center gap-2 pb-2 border-b border-slate-800/80">
-              <Send className="w-4 h-4 text-purple-400" />
-              <h3 className="font-bold text-slate-100 text-sm">Step 3: Carrier Sample Messages & Opt-In Proof</h3>
-            </div>
-
-            <div>
-              <label className="block text-slate-400 font-medium mb-1">Sample Message #1 (Appointment Follow-up) *</label>
-              <textarea
-                rows={2}
-                value={sampleMessage1}
-                onChange={e => setSampleMessage1(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-slate-400 font-medium mb-1">Sample Message #2 (Quote Presentation)</label>
-              <textarea
-                rows={2}
-                value={sampleMessage2}
-                onChange={e => setSampleMessage2(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500"
-              />
-            </div>
-
-            <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800 text-[11px] text-slate-400 space-y-1.5">
-              <div className="font-semibold text-slate-300 flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Mandatory CTIA & Carrier Disclosures Included Automatically:</span>
-              </div>
-              <p>&bull; Every outgoing template includes "Reply STOP to cancel, HELP for assistance".</p>
-              <p>&bull; Message frequency varies. Msg & data rates may apply.</p>
-              <p>&bull; Opt-in keywords: <span className="font-mono text-slate-200">{optInKeywords}</span></p>
-            </div>
-          </div>
-
-          {/* Submit Actions */}
-          <div className="pt-2 flex items-center justify-between border-t border-slate-800">
-            <div className="text-[11px] text-slate-500 font-mono">
-              Brand SID: {a2pRegistration?.brandSid || 'BN_PENDING'} &bull; Campaign SID: {a2pRegistration?.campaignSid || 'CP_PENDING'}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsA2POpen(false)}
-                className="px-4 py-2 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition"
-              >
-                Close
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-semibold shadow-md transition disabled:opacity-50"
-              >
-                {isSubmitting ? 'Submitting to TCR...' : 'Submit / Re-verify Brand'}
-              </button>
-            </div>
-          </div>
-        </form>
+        </div>
       </div>
     </div>
   );

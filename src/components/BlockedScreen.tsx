@@ -85,7 +85,7 @@ export const BlockedScreen: React.FC<BlockedScreenProps> = ({
         </div>
 
         <div className="mt-6 pt-4 border-t border-slate-800/60 text-center text-[11px] text-slate-500">
-          EST8 Financial Group &bull; Secure Multi-Tenant Architecture &bull; NPN Validated
+          EST8 Financial Group &bull; in partnership with Symmetry Financial Group
         </div>
       </div>
     </div>

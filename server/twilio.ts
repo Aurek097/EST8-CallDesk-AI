@@ -1,1042 +1,593 @@
-import { Router, Request, Response } from 'express';
+// Calling and texting through Twilio.
+// Every Twilio webhook must carry a valid X-Twilio-Signature, and every lead call passes the
+// compliance checks in compliance.ts on the server, whatever the browser sends.
+import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import twilio from 'twilio';
-import { db } from './db.ts';
+import { requireAdmin } from './auth.ts';
+import { checkLeadCall, smsKeyword, stateCode, toUSE164 } from './compliance.ts';
+import {
+  appendLeadLog, C, digits, leadDocId, type CallLogDoc, type LeadDoc, type PhoneNumberDoc, type SmsDoc,
+  type Store, type TelephonyConfigDoc, type UserDoc,
+} from './store.ts';
 
-export const telephonyRouter = Router();
+export type TwilioLike = ReturnType<typeof twilio>;
 
-// Twilio Production Config & Credentials
-const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
-const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
-const API_KEY = process.env.TWILIO_API_KEY || '';
-const API_SECRET = process.env.TWILIO_API_SECRET || '';
-const TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID || '';
-const MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || '';
+const env = () => ({
+  accountSid: process.env.TWILIO_ACCOUNT_SID || '',
+  authToken: process.env.TWILIO_AUTH_TOKEN || '',
+  apiKey: process.env.TWILIO_API_KEY || '',
+  apiSecret: process.env.TWILIO_API_SECRET || '',
+  twimlAppSid: process.env.TWILIO_TWIML_APP_SID || '',
+  messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID || '',
+  defaultCallerId: toUSE164(process.env.TWILIO_DEFAULT_CALLER_ID || ''),
+  appUrl: (process.env.APP_URL || '').replace(/\/$/, ''),
+  agentsMayBuyNumbers: process.env.ALLOW_AGENT_NUMBER_PURCHASE === 'true',
+});
+const isReal = (v: string, prefix: string) => v.startsWith(prefix) && !/X{6}/.test(v);
 
-// Initialize real Twilio client if credentials exist
-let twilioClient: any = null;
-if (ACCOUNT_SID && AUTH_TOKEN) {
-  try {
-    twilioClient = twilio(ACCOUNT_SID, AUTH_TOKEN);
-  } catch (err) {
-    console.warn('[Telephony] Failed to initialize live Twilio client:', err);
-  }
-}
-
-// Known Area Codes & Locations for realistic carrier inventory search
-const AREA_CODE_DIRECTORY: Record<string, { city: string; state: string; rateCenter: string }> = {
-  '803': { city: 'Columbia', state: 'SC', rateCenter: 'COLUMBIA' },
-  '843': { city: 'Charleston', state: 'SC', rateCenter: 'CHRLSTN' },
-  '864': { city: 'Greenville', state: 'SC', rateCenter: 'GREENVL' },
-  '704': { city: 'Charlotte', state: 'NC', rateCenter: 'CHARLOTTE' },
-  '919': { city: 'Raleigh', state: 'NC', rateCenter: 'RALEIGH' },
-  '336': { city: 'Greensboro', state: 'NC', rateCenter: 'GREENSBORO' },
-  '404': { city: 'Atlanta', state: 'GA', rateCenter: 'ATLANTA' },
-  '470': { city: 'Atlanta Metro', state: 'GA', rateCenter: 'ATLANTA' },
-  '770': { city: 'Marietta', state: 'GA', rateCenter: 'MARIETTA' },
-  '305': { city: 'Miami', state: 'FL', rateCenter: 'MIAMI' },
-  '407': { city: 'Orlando', state: 'FL', rateCenter: 'ORLANDO' },
-  '813': { city: 'Tampa', state: 'FL', rateCenter: 'TAMPA' },
-  '904': { city: 'Jacksonville', state: 'FL', rateCenter: 'JCKNSVL' },
-  '512': { city: 'Austin', state: 'TX', rateCenter: 'AUSTIN' },
-  '214': { city: 'Dallas', state: 'TX', rateCenter: 'DALLAS' },
-  '713': { city: 'Houston', state: 'TX', rateCenter: 'HOUSTON' },
-  '615': { city: 'Nashville', state: 'TN', rateCenter: 'NASHVILLE' },
-  '901': { city: 'Memphis', state: 'TN', rateCenter: 'MEMPHIS' },
-  '614': { city: 'Columbus', state: 'OH', rateCenter: 'COLUMBUS' },
-  '312': { city: 'Chicago', state: 'IL', rateCenter: 'CHICAGO' },
+const fmtDuration = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+const pretty = (e164: string) => {
+  const d = digits(e164);
+  return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : e164;
 };
-
-// Helper: Extract authenticated user from request
-function getAuthUser(req: Request) {
-  const email = (req.headers['x-user-email'] as string || req.query.auth_email as string || '').toLowerCase().trim();
-  if (!email) return null;
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
-  return user || null;
-}
-
-// Helper: Format base URL for webhooks
-function getBaseUrl(req: Request) {
-  if (process.env.APP_URL) {
-    return process.env.APP_URL.replace(/\/$/, '');
-  }
-  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  return `${proto}://${host}`;
-}
-
-// Helper: Normalize phone string for matching
-function cleanPhone(raw: string) {
-  return raw.replace(/\D/g, '').slice(-10);
-}
-
-// ----------------- 1. TWILIO CREDENTIALS & WEBHOOK DIAGNOSTICS ----------------- //
-
-telephonyRouter.get('/diagnostics', (req: Request, res: Response) => {
-  const baseUrl = getBaseUrl(req);
-
-  res.json({
-    variables: {
-      accountSid: {
-        name: 'TWILIO_ACCOUNT_SID',
-        configured: Boolean(ACCOUNT_SID && !ACCOUNT_SID.includes('XXXX')),
-        preview: ACCOUNT_SID ? `${ACCOUNT_SID.slice(0, 6)}...` : 'Missing'
-      },
-      authToken: {
-        name: 'TWILIO_AUTH_TOKEN',
-        configured: Boolean(AUTH_TOKEN && !AUTH_TOKEN.includes('your_')),
-        preview: AUTH_TOKEN ? '••••••••••••••••' : 'Missing'
-      },
-      apiKey: {
-        name: 'TWILIO_API_KEY',
-        configured: Boolean(API_KEY && !API_KEY.includes('XXXX')),
-        preview: API_KEY ? `${API_KEY.slice(0, 6)}...` : 'Missing'
-      },
-      apiSecret: {
-        name: 'TWILIO_API_SECRET',
-        configured: Boolean(API_SECRET && !API_SECRET.includes('your_')),
-        preview: API_SECRET ? '••••••••••••••••' : 'Missing'
-      },
-      twimlAppSid: {
-        name: 'TWILIO_TWIML_APP_SID',
-        configured: Boolean(TWIML_APP_SID && !TWIML_APP_SID.includes('XXXX')),
-        preview: TWIML_APP_SID ? `${TWIML_APP_SID.slice(0, 6)}...` : 'Missing'
-      },
-      messagingServiceSid: {
-        name: 'TWILIO_MESSAGING_SERVICE_SID',
-        configured: Boolean(MESSAGING_SERVICE_SID && !MESSAGING_SERVICE_SID.includes('XXXX')),
-        preview: MESSAGING_SERVICE_SID ? `${MESSAGING_SERVICE_SID.slice(0, 6)}...` : 'Missing'
-      }
-    },
-    webhooks: {
-      voiceOutboundUrl: `${baseUrl}/api/telephony/voice/outbound`,
-      voiceInboundUrl: `${baseUrl}/api/telephony/voice/inbound`,
-      voiceStatusUrl: `${baseUrl}/api/telephony/voice/status`,
-      smsInboundUrl: `${baseUrl}/api/telephony/sms/inbound`,
-      smsStatusUrl: `${baseUrl}/api/telephony/sms/status`
-    },
-    isLiveConnected: Boolean(ACCOUNT_SID && AUTH_TOKEN && twilioClient)
-  });
-});
-
-// ----------------- 2. WEBRTC ACCESS TOKEN GENERATOR ----------------- //
-
-telephonyRouter.get('/token', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const identity = `agent_${user.id}`;
-
-  // If real API Key and Secret are present, generate a production Twilio JWT
-  if (ACCOUNT_SID && API_KEY && API_SECRET) {
-    try {
-      const { AccessToken } = twilio.jwt;
-      const { VoiceGrant } = AccessToken;
-
-      const accessToken = new AccessToken(ACCOUNT_SID, API_KEY, API_SECRET, {
-        identity,
-        ttl: 3600
-      });
-
-      const voiceGrant = new VoiceGrant({
-        outgoingApplicationSid: TWIML_APP_SID,
-        incomingAllow: true
-      });
-
-      accessToken.addGrant(voiceGrant);
-      const token = accessToken.toJwt();
-
-      return res.json({
-        token,
-        identity,
-        accountSid: ACCOUNT_SID,
-        twimlAppSid: TWIML_APP_SID,
-        isLive: true,
-        ttl: 3600
-      });
-    } catch (err) {
-      console.warn('Failed to mint real Twilio JWT, falling back to simulated session:', err);
-    }
-  }
-
-  // Fallback simulator token
-  const simulatedToken = `webrtc_tok_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-  res.json({
-    token: simulatedToken,
-    identity,
-    accountSid: ACCOUNT_SID ? `${ACCOUNT_SID.slice(0, 6)}...` : 'AC_SIMULATOR',
-    twimlAppSid: TWIML_APP_SID || 'AP_SIMULATOR',
-    isLive: false,
-    ttl: 3600
-  });
-});
-
-// ----------------- 3. TWIML VOICE WEBHOOKS ----------------- //
-
-// A. Outbound Call TwiML (Called by Twilio when browser WebRTC softphone places a call)
-telephonyRouter.all('/voice/outbound', (req: Request, res: Response) => {
-  const leadPhone = req.body.To || req.query.To || req.body.leadPhone || '';
-  const callerId = req.body.CallerId || req.query.CallerId || req.body.callerId || '+18035550142';
-  const baseUrl = getBaseUrl(req);
-
-  const voiceResponse = new twilio.twiml.VoiceResponse();
-
-  if (leadPhone) {
-    const dial = voiceResponse.dial({
-      callerId,
-      answerOnBridge: true,
-      action: `${baseUrl}/api/telephony/voice/status`
-    });
-    dial.number(leadPhone);
-  } else {
-    voiceResponse.say({ voice: 'Polly.Matthew' }, 'Invalid recipient phone number.');
-  }
-
-  res.type('text/xml');
-  res.send(voiceResponse.toString());
-});
-
-// B. Inbound Call TwiML (Rings browser softphone first for 20s, then falls back to cell phone)
-telephonyRouter.all('/voice/inbound', (req: Request, res: Response) => {
-  const from = (req.body.From || req.query.From || '').toString();
-  const to = (req.body.To || req.query.To || '').toString();
-  const baseUrl = getBaseUrl(req);
-
-  // Identify which agent owns this inbound number
-  const numberRecord = db.prepare('SELECT user_id, phone_number FROM user_phone_numbers WHERE phone_number = ?').get(to) as any;
-  const agentId = numberRecord ? numberRecord.user_id : 'user_admin_aurek';
-
-  // Find agent profile to get their cell phone
-  const agentUser = db.prepare('SELECT phone FROM users WHERE id = ?').get(agentId) as any;
-  const cellPhone = agentUser?.phone || '(803) 555-0142';
-
-  // Automatically log incoming call on lead timeline if match exists
-  if (from) {
-    const cleanFrom = cleanPhone(from);
-    const leads = db.prepare('SELECT id, data_json FROM leads WHERE user_id = ?').all(agentId) as any[];
-    for (const l of leads) {
-      const data = JSON.parse(l.data_json);
-      if (data.phone && cleanPhone(data.phone) === cleanFrom) {
-        data.log = [
-          {
-            t: Date.now(),
-            k: 'call',
-            x: `Inbound Call received from lead (${from})`
-          },
-          ...(data.log || [])
-        ];
-        if (data.status === 'new') data.status = 'contacted';
-        db.prepare('UPDATE leads SET data_json = ?, status = ?, updated_at = ? WHERE id = ?').run(
-          JSON.stringify(data),
-          data.status,
-          Date.now(),
-          l.id
-        );
-        break;
-      }
-    }
-  }
-
-  const voiceResponse = new twilio.twiml.VoiceResponse();
-
-  // 1. First dial browser softphone client (timeout 20s)
-  const dial = voiceResponse.dial({
-    timeout: 20,
-    action: `${baseUrl}/api/telephony/voice/inbound-fallback?agentId=${encodeURIComponent(agentId)}`
-  });
-  dial.client(`agent_${agentId}`);
-
-  res.type('text/xml');
-  res.send(voiceResponse.toString());
-});
-
-// C. Inbound Fallback TwiML (Triggered if browser softphone did not answer within 20s)
-telephonyRouter.all('/voice/inbound-fallback', (req: Request, res: Response) => {
-  const dialStatus = req.body.DialCallStatus || req.query.DialCallStatus || '';
-  const agentId = req.query.agentId as string || 'user_admin_aurek';
-
-  const voiceResponse = new twilio.twiml.VoiceResponse();
-
-  // If call was already answered on WebRTC, terminate TwiML cleanly
-  if (dialStatus === 'completed' || dialStatus === 'answered') {
-    voiceResponse.hangup();
-    res.type('text/xml');
-    return res.send(voiceResponse.toString());
-  }
-
-  // Otherwise, dial the agent's mobile cell phone
-  const agentUser = db.prepare('SELECT phone FROM users WHERE id = ?').get(agentId) as any;
-  const cellPhone = agentUser?.phone || '+18035550142';
-
-  const dial = voiceResponse.dial({
-    timeout: 25
-  });
-  dial.number(cellPhone);
-
-  // If still unanswered, play voicemail greeting and record
-  voiceResponse.say(
-    { voice: 'Polly.Matthew' },
-    'Thank you for calling EST8 Financial Group. Please leave a brief message with your name and callback number after the tone.'
-  );
-  voiceResponse.record({
-    maxLength: 120,
-    playBeep: true
-  });
-
-  res.type('text/xml');
-  res.send(voiceResponse.toString());
-});
-
-// D. Voice Call Status Callback
-telephonyRouter.all('/voice/status', (req: Request, res: Response) => {
-  const callSid = req.body.CallSid || req.query.CallSid;
-  const callDuration = parseInt(req.body.CallDuration || req.query.CallDuration || '0', 10);
-  const callStatus = req.body.CallStatus || req.query.CallStatus || 'completed';
-
-  if (callSid && callDuration > 0) {
-    db.prepare('UPDATE call_logs SET duration = ? WHERE id = ?').run(callDuration, callSid);
-  }
-
-  res.type('text/xml');
-  res.send('<Response/>');
-});
-
-// ----------------- 4. INBOUND & OUTBOUND SMS WEBHOOKS ----------------- //
-
-// Inbound SMS Webhook (Twilio hits this when a lead sends a text message)
-telephonyRouter.all('/sms/inbound', (req: Request, res: Response) => {
-  const from = (req.body.From || req.query.From || '').toString();
-  const to = (req.body.To || req.query.To || '').toString();
-  const body = (req.body.Body || req.query.Body || '').toString().trim();
-
-  if (from && body) {
-    const cleanFrom = cleanPhone(from);
-
-    // Find lead across all accounts
-    const allLeads = db.prepare('SELECT id, user_id, data_json FROM leads').all() as any[];
-    for (const l of allLeads) {
-      const data = JSON.parse(l.data_json);
-      if (data.phone && cleanPhone(data.phone) === cleanFrom) {
-        const now = Date.now();
-        const msgId = `msg_in_${now}_${Math.random().toString(36).substring(2, 6)}`;
-
-        // Insert into sms_messages table
-        try {
-          db.prepare(`
-            INSERT INTO sms_messages (id, user_id, lead_id, direction, from_number, to_number, body, status, is_trial_simulated, created_at)
-            VALUES (?, ?, ?, 'inbound', ?, ?, ?, 'received', 0, ?)
-          `).run(msgId, l.user_id, l.id, from, to, body, now);
-        } catch (e) {
-          console.warn('[Telephony] Failed to insert into sms_messages:', e);
-        }
-
-        data.log = [
-          {
-            t: now,
-            k: 'text',
-            x: `Inbound SMS from ${data.firstName || 'Client'}: "${body}"`
-          },
-          ...(data.log || [])
-        ];
-
-        db.prepare('UPDATE leads SET data_json = ?, updated_at = ? WHERE id = ?').run(
-          JSON.stringify(data),
-          now,
-          l.id
-        );
-        break;
-      }
-    }
-  }
-
-  // Respond with standard empty TwiML SMS response
-  res.type('text/xml');
-  res.send('<Response></Response>');
-});
-
-// SMS Delivery Status Callback
-telephonyRouter.all('/sms/status', (req: Request, res: Response) => {
-  res.type('text/xml');
-  res.send('<Response/>');
-});
-
-// ----------------- 5. NUMBER SEARCH & PURCHASING ----------------- //
-
-telephonyRouter.get('/numbers/search', async (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const areaCode = (req.query.areaCode as string || '').trim().replace(/\D/g, '');
-  const state = (req.query.state as string || '').trim().toUpperCase();
-
-  let targetAreaCode = areaCode;
-  if (!targetAreaCode && state) {
-    const match = Object.entries(AREA_CODE_DIRECTORY).find(([_, loc]) => loc.state === state);
-    if (match) targetAreaCode = match[0];
-  }
-  if (!targetAreaCode) {
-    targetAreaCode = '803';
-  }
-
-  const loc = AREA_CODE_DIRECTORY[targetAreaCode] || { city: 'Metro Area', state: state || 'US', rateCenter: 'LOCAL' };
-
-  // If real Twilio credentials are active, search live AvailablePhoneNumbers
-  if (twilioClient) {
-    try {
-      const available = await twilioClient.availablePhoneNumbers('US').local.list({
-        areaCode: parseInt(targetAreaCode, 10),
-        limit: 6,
-        voiceEnabled: true,
-        smsEnabled: true
-      });
-
-      if (available && available.length > 0) {
-        const liveNumbers = available.map((n: any) => ({
-          phoneNumber: n.phoneNumber,
-          friendlyName: n.friendlyName,
-          locality: n.locality || loc.city,
-          region: n.region || loc.state,
-          postalCode: n.postalCode || '29201',
-          rateCenter: n.rateCenter || loc.rateCenter,
-          capabilities: { voice: true, sms: true, mms: true },
-          monthlyCost: '$1.15/mo'
-        }));
-
-        return res.json({
-          areaCode: targetAreaCode,
-          locality: loc.city,
-          state: loc.state,
-          numbers: liveNumbers
-        });
-      }
-    } catch (err) {
-      console.warn('[Telephony] Live number search error, using simulated carrier inventory:', err);
-    }
-  }
-
-  // Generate realistic carrier numbers
-  const results = [];
-  const prefixes = ['219', '348', '492', '581', '620', '794', '812', '905'];
-  for (let i = 0; i < 6; i++) {
-    const prefix = prefixes[i % prefixes.length];
-    const line = Math.floor(1000 + Math.random() * 9000);
-    const rawNumber = `+1${targetAreaCode}${prefix}${line}`;
-    const friendlyName = `(${targetAreaCode}) ${prefix}-${line}`;
-
-    results.push({
-      phoneNumber: rawNumber,
-      friendlyName,
-      locality: loc.city,
-      region: loc.state,
-      postalCode: '29201',
-      rateCenter: loc.rateCenter,
-      capabilities: { voice: true, sms: true, mms: true },
-      monthlyCost: '$1.15/mo'
-    });
-  }
-
-  res.json({
-    areaCode: targetAreaCode,
-    locality: loc.city,
-    state: loc.state,
-    numbers: results
-  });
-});
-
-telephonyRouter.post('/numbers/buy', async (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const { phoneNumber, friendlyName } = req.body;
-  if (!phoneNumber) return res.status(400).json({ error: 'Phone number is required' });
-
-  const id = `pn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  let twilioSid = `PN_${Math.random().toString(36).substring(2, 12).toUpperCase()}`;
-
-  // If live Twilio client is active, purchase via IncomingPhoneNumbers API
-  if (twilioClient) {
-    try {
-      const baseUrl = getBaseUrl(req);
-      const bought = await twilioClient.incomingPhoneNumbers.create({
-        phoneNumber,
-        friendlyName: friendlyName || `EST8 - ${user.name}`,
-        voiceUrl: `${baseUrl}/api/telephony/voice/inbound`,
-        smsUrl: `${baseUrl}/api/telephony/sms/inbound`
-      });
-      twilioSid = bought.sid;
-    } catch (err) {
-      console.warn('[Telephony] Live number purchase skipped, using sandbox assignment:', err);
-    }
-  }
-
-  const count = db.prepare('SELECT COUNT(*) as count FROM user_phone_numbers WHERE user_id = ?').get(user.id) as { count: number };
-  const isPrimary = count.count === 0 ? 1 : 0;
-
-  db.prepare(`
-    INSERT INTO user_phone_numbers (id, user_id, phone_number, friendly_name, twilio_sid, capabilities_voice, capabilities_sms, purchased_at, is_primary)
-    VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)
-  `).run(
-    id,
-    user.id,
-    phoneNumber,
-    friendlyName || phoneNumber,
-    twilioSid,
-    new Date().toISOString(),
-    isPrimary
-  );
-
-  if (isPrimary) {
-    db.prepare(`
-      INSERT INTO telephony_configs (user_id, calling_mode, bridge_phone, primary_caller_id, auto_log_call, record_calls)
-      VALUES (?, 'webrtc', ?, ?, 1, 0)
-      ON CONFLICT(user_id) DO UPDATE SET primary_caller_id = excluded.primary_caller_id
-    `).run(user.id, user.phone || phoneNumber, phoneNumber);
-  }
-
-  res.json({
-    success: true,
-    number: {
-      id,
-      userId: user.id,
-      phoneNumber,
-      friendlyName: friendlyName || phoneNumber,
-      twilioSid,
-      capabilitiesVoice: true,
-      capabilitiesSms: true,
-      purchasedAt: new Date().toISOString(),
-      isPrimary: Boolean(isPrimary)
-    }
-  });
-});
-
-telephonyRouter.get('/numbers/my', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const rows = db.prepare('SELECT * FROM user_phone_numbers WHERE user_id = ? ORDER BY is_primary DESC, purchased_at DESC').all(user.id) as any[];
-
-  const numbers = rows.map(r => ({
-    id: r.id,
-    userId: r.user_id,
-    phoneNumber: r.phone_number,
-    friendlyName: r.friendly_name,
-    twilioSid: r.twilio_sid,
-    capabilitiesVoice: Boolean(r.capabilities_voice),
-    capabilitiesSms: Boolean(r.capabilities_sms),
-    purchasedAt: r.purchased_at,
-    isPrimary: Boolean(r.is_primary)
-  }));
-
-  res.json({ numbers });
-});
-
-telephonyRouter.patch('/numbers/:id/primary', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const numberId = req.params.id;
-  const target = db.prepare('SELECT * FROM user_phone_numbers WHERE id = ? AND user_id = ?').get(numberId, user.id) as any;
-  if (!target) return res.status(404).json({ error: 'Number not found' });
-
-  const tx = db.transaction(() => {
-    db.prepare('UPDATE user_phone_numbers SET is_primary = 0 WHERE user_id = ?').run(user.id);
-    db.prepare('UPDATE user_phone_numbers SET is_primary = 1 WHERE id = ?').run(numberId);
-    db.prepare(`
-      INSERT INTO telephony_configs (user_id, calling_mode, bridge_phone, primary_caller_id, auto_log_call, record_calls)
-      VALUES (?, 'webrtc', ?, ?, 1, 0)
-      ON CONFLICT(user_id) DO UPDATE SET primary_caller_id = excluded.primary_caller_id
-    `).run(user.id, user.phone || target.phone_number, target.phone_number);
-  });
-  tx();
-
-  res.json({ success: true, primaryId: numberId, primaryNumber: target.phone_number });
-});
-
-telephonyRouter.delete('/numbers/:id', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const numberId = req.params.id;
-  db.prepare('DELETE FROM user_phone_numbers WHERE id = ? AND user_id = ?').run(numberId, user.id);
-  res.json({ success: true, deletedId: numberId });
-});
-
-// ----------------- 6. TELEPHONY CONFIG ----------------- //
-
-telephonyRouter.get('/config', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  let config = db.prepare('SELECT * FROM telephony_configs WHERE user_id = ?').get(user.id) as any;
-  if (!config) {
-    const primaryNumber = db.prepare('SELECT phone_number FROM user_phone_numbers WHERE user_id = ? AND is_primary = 1').get(user.id) as any;
-    config = {
-      calling_mode: 'webrtc',
-      bridge_phone: user.phone || '',
-      primary_caller_id: primaryNumber?.phone_number || '',
-      auto_log_call: 1,
-      record_calls: 0
-    };
-  }
-
-  res.json({
-    config: {
-      callingMode: config.calling_mode || 'webrtc',
-      bridgePhone: config.bridge_phone || user.phone || '',
-      primaryCallerId: config.primary_caller_id || '',
-      autoLogCall: Boolean(config.auto_log_call),
-      recordCalls: Boolean(config.record_calls)
-    }
-  });
-});
-
-telephonyRouter.put('/config', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const { callingMode, bridgePhone, primaryCallerId, autoLogCall, recordCalls } = req.body;
-
-  db.prepare(`
-    INSERT INTO telephony_configs (user_id, calling_mode, bridge_phone, primary_caller_id, auto_log_call, record_calls)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      calling_mode = excluded.calling_mode,
-      bridge_phone = excluded.bridge_phone,
-      primary_caller_id = excluded.primary_caller_id,
-      auto_log_call = excluded.auto_log_call,
-      record_calls = excluded.record_calls
-  `).run(
-    user.id,
-    callingMode || 'webrtc',
-    bridgePhone || '',
-    primaryCallerId || '',
-    autoLogCall !== undefined ? (autoLogCall ? 1 : 0) : 1,
-    recordCalls !== undefined ? (recordCalls ? 1 : 0) : 0
-  );
-
-  res.json({ success: true });
-});
-
-// ----------------- 7. OUTBOUND CALL TRIGGER ----------------- //
-
-telephonyRouter.post('/call', async (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const { leadId, leadPhone, callerId, mode, leadName } = req.body;
-  if (!leadPhone) return res.status(400).json({ error: 'Lead phone is required' });
-
-  const callId = `CA_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const callingMode = mode || 'webrtc';
-  const baseUrl = getBaseUrl(req);
-
-  // If Mobile Bridging mode is active and live Twilio is connected:
-  if (callingMode === 'bridge' && twilioClient) {
-    try {
-      const agentCell = user.phone || '(803) 555-0142';
-      await twilioClient.calls.create({
-        to: agentCell,
-        from: callerId || '+18035550142',
-        url: `${baseUrl}/api/telephony/voice/outbound?To=${encodeURIComponent(leadPhone)}&CallerId=${encodeURIComponent(callerId)}`
-      });
-    } catch (err) {
-      console.warn('[Telephony] Live mobile bridge call error, using local simulation:', err);
-    }
-  }
-
-  // Update lead in SQLite
-  if (leadId) {
-    const leadRow = db.prepare('SELECT data_json FROM leads WHERE id = ?').get(leadId) as any;
-    if (leadRow) {
-      const leadData = JSON.parse(leadRow.data_json);
-      leadData.dials = (leadData.dials || 0) + 1;
-      leadData.lastDial = Date.now();
-      leadData.log = [
-        {
-          t: Date.now(),
-          k: 'call',
-          x: `Placed outbound call via ${callingMode === 'bridge' ? 'Mobile Bridge' : 'Browser WebRTC Softphone'} (CID: ${callerId || 'Agency'})`
-        },
-        ...(leadData.log || [])
-      ];
-
-      db.prepare(`
-        UPDATE leads
-        SET dials = ?, last_dial = ?, data_json = ?, updated_at = ?
-        WHERE id = ?
-      `).run(leadData.dials, leadData.lastDial, JSON.stringify(leadData), Date.now(), leadId);
-    }
-
-    db.prepare(`
-      INSERT INTO call_logs (id, user_id, lead_id, outcome, notes, timestamp, duration)
-      VALUES (?, ?, ?, 'call', ?, ?, 0)
-    `).run(callId, user.id, leadId, `Mode: ${callingMode}`, Date.now());
-  }
-
-  res.json({
-    success: true,
-    callId,
-    mode: callingMode,
-    leadPhone,
-    callerId,
-    message: callingMode === 'bridge'
-      ? `Calling your mobile cell first (${user.phone || 'Cell Phone'}). Answer to bridge to ${leadName || 'lead'}!`
-      : `Connecting browser WebRTC audio to ${leadPhone}...`
-  });
-});
-
-// ----------------- 8. 10DLC SMS DISPATCH & CONVERSATIONS ----------------- //
-
-telephonyRouter.get('/sms/messages', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const leadId = req.query.leadId as string;
-  if (!leadId) return res.status(400).json({ error: 'leadId is required' });
-
-  const rows = db.prepare('SELECT * FROM sms_messages WHERE lead_id = ? ORDER BY created_at ASC').all(leadId) as any[];
-
-  const messages = rows.map(r => ({
-    id: r.id,
-    leadId: r.lead_id,
-    direction: r.direction,
-    fromNumber: r.from_number,
-    toNumber: r.to_number,
-    body: r.body,
-    status: r.status,
-    isTrialSimulated: Boolean(r.is_trial_simulated),
-    createdAt: r.created_at
-  }));
-
-  res.json({ messages });
-});
-
-telephonyRouter.post('/sms', async (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const { leadId, to, from, body } = req.body;
-  if (!to || !body) return res.status(400).json({ error: 'Recipient phone and message body are required' });
-
-  let messageSid = `SM_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-  let isTrialNotice = false;
-  let trialNoticeMessage = '';
-  let status = 'delivered';
-
-  // If live Twilio client is active, send via Messaging Service (or From number)
-  if (twilioClient) {
-    try {
-      const msgOptions: any = {
-        to,
-        body
-      };
-      if (MESSAGING_SERVICE_SID) {
-        msgOptions.messagingServiceSid = MESSAGING_SERVICE_SID;
-      } else {
-        msgOptions.from = from || '+18035550142';
-      }
-
-      const sentMsg = await twilioClient.messages.create(msgOptions);
-      messageSid = sentMsg.sid;
-      status = 'delivered';
-    } catch (err: any) {
-      console.warn('[Telephony] Twilio SMS dispatch error:', err.code, err.message);
-      // Handle Twilio Trial limitation: 21608 (unverified number)
-      if (err.code === 21608 || (err.message && err.message.toLowerCase().includes('unverified'))) {
-        isTrialNotice = true;
-        status = 'simulated';
-        trialNoticeMessage = 'Twilio Trial Account Notice: Recipient is not a Verified Caller ID in your Twilio Console. Message was captured and recorded in Sandbox mode so your workflow is not interrupted.';
-      } else {
-        // Fallback gracefully for sandbox or trial accounts
-        status = 'simulated';
-        trialNoticeMessage = `Twilio Notice (${err.code || 'Carrier'}): ${err.message}. Recorded in local sandbox.`;
-      }
-    }
-  } else {
-    // Simulator mode
-    status = 'simulated';
-  }
-
-  const now = Date.now();
-  const msgId = `msg_${now}_${Math.random().toString(36).substring(2, 6)}`;
-
-  // Store in sms_messages table
-  try {
-    db.prepare(`
-      INSERT INTO sms_messages (id, user_id, lead_id, direction, from_number, to_number, body, status, is_trial_simulated, created_at)
-      VALUES (?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?)
-    `).run(
-      msgId,
-      user.id,
-      leadId || '',
-      from || '+18035550142',
-      to,
-      body,
-      status,
-      status === 'simulated' ? 1 : 0,
-      now
-    );
-  } catch (err) {
-    console.warn('[Telephony] Error inserting outbound message to DB:', err);
-  }
-
-  // Log SMS inside lead history
-  if (leadId) {
-    const leadRow = db.prepare('SELECT data_json FROM leads WHERE id = ?').get(leadId) as any;
-    if (leadRow) {
-      const leadData = JSON.parse(leadRow.data_json);
-      leadData.log = [
-        {
-          t: now,
-          k: 'text',
-          x: `SMS sent (${status === 'simulated' ? 'Sandbox/Trial' : '10DLC'}): "${body.length > 70 ? body.slice(0, 67) + '...' : body}"`
-        },
-        ...(leadData.log || [])
-      ];
-
-      db.prepare(`
-        UPDATE leads
-        SET data_json = ?, updated_at = ?
-        WHERE id = ?
-      `).run(JSON.stringify(leadData), now, leadId);
-    }
-  }
-
-  res.json({
-    success: true,
-    messageId: msgId,
-    messageSid,
-    status,
-    isTrialNotice,
-    trialNoticeMessage,
-    sentAt: new Date(now).toISOString()
-  });
-});
-
-// Simulate Inbound SMS (Allows instant testing of two-way SMS without waiting for lead or on trial accounts)
-telephonyRouter.post('/sms/simulate-inbound', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const { leadId, body } = req.body;
-  if (!leadId || !body) return res.status(400).json({ error: 'leadId and body are required' });
-
-  const leadRow = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId) as any;
-  if (!leadRow) return res.status(404).json({ error: 'Lead not found' });
-
-  const leadData = JSON.parse(leadRow.data_json);
-  const primaryNumber = db.prepare('SELECT phone_number FROM user_phone_numbers WHERE user_id = ? AND is_primary = 1').get(user.id) as any;
-  const agentPhone = primaryNumber?.phone_number || '+18035550142';
-  const leadPhone = leadData.phone || '(803) 441-2904';
-
-  const msgId = `msg_sim_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const now = Date.now();
-
-  try {
-    db.prepare(`
-      INSERT INTO sms_messages (id, user_id, lead_id, direction, from_number, to_number, body, status, is_trial_simulated, created_at)
-      VALUES (?, ?, ?, 'inbound', ?, ?, ?, 'received', 1, ?)
-    `).run(msgId, user.id, leadId, leadPhone, agentPhone, body.trim(), now);
-  } catch (err) {
-    console.error('Failed to insert simulated inbound SMS:', err);
-  }
-
-  leadData.log = [
-    {
-      t: now,
-      k: 'text',
-      x: `Inbound SMS from ${leadData.firstName || 'Client'}: "${body.trim()}"`
-    },
-    ...(leadData.log || [])
-  ];
-
-  db.prepare('UPDATE leads SET data_json = ?, updated_at = ? WHERE id = ?').run(
-    JSON.stringify(leadData),
-    now,
-    leadId
-  );
-
-  res.json({
-    success: true,
-    message: {
-      id: msgId,
-      leadId,
-      direction: 'inbound',
-      fromNumber: leadPhone,
-      toNumber: agentPhone,
-      body: body.trim(),
-      status: 'received',
-      isTrialSimulated: true,
-      createdAt: now
-    }
-  });
-});
-
-// Call Disposition Endpoint (structured outcome logging from dialer)
-telephonyRouter.post('/call/disposition', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const { leadId, outcome, notes, appointmentDate, appointmentTime, durationSeconds } = req.body;
-  if (!leadId || !outcome) return res.status(400).json({ error: 'leadId and outcome are required' });
-
-  const leadRow = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId) as any;
-  if (!leadRow) return res.status(404).json({ error: 'Lead not found' });
-
-  const leadData = JSON.parse(leadRow.data_json);
-  const now = Date.now();
-
-  let newStatus = leadData.status;
-  if (outcome === 'appt') {
-    newStatus = 'appt';
-    if (appointmentDate) leadData.apptDay = appointmentDate;
-    if (appointmentTime) leadData.apptTime = appointmentTime;
-  } else if (outcome === 'quoted') {
-    newStatus = 'quoted';
-  } else if (outcome === 'talk') {
-    newStatus = 'contacted';
-  } else if (outcome === 'dnc') {
-    newStatus = 'dnc';
-  } else if (outcome === 'notint') {
-    newStatus = 'notint';
-  }
-
-  const outcomeLabels: Record<string, string> = {
-    na: 'No Answer',
-    vm: 'Left Voicemail',
-    talk: 'Spoke with Client',
-    appt: 'Appointment Scheduled',
-    quoted: 'Quoted Client',
-    dnc: 'Do Not Call (DNC)',
-    notint: 'Not Interested'
+const xml = (res: Response, vr: InstanceType<typeof twilio.twiml.VoiceResponse> | string) =>
+  res.type('text/xml').send(typeof vr === 'string' ? vr : vr.toString());
+const EMPTY = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
+
+export function createTelephonyRouter({
+  store,
+  auth,
+  twilioClient,
+}: {
+  store: Store;
+  auth: RequestHandler;
+  twilioClient: TwilioLike | null;
+}) {
+  const r = Router();
+  const users = store.col<UserDoc>(C.users);
+  const leads = store.col<LeadDoc>(C.leads);
+  const numbers = store.col<PhoneNumberDoc>(C.numbers);
+  const configs = store.col<TelephonyConfigDoc>(C.telephony);
+  const sms = store.col<SmsDoc>(C.sms);
+  const calls = store.col<CallLogDoc>(C.calls);
+  const events = store.col<{ at: number }>(C.events);
+  const wrap =
+    (fn: (req: Request, res: Response) => Promise<unknown>) =>
+    (req: Request, res: Response, next: NextFunction) =>
+      fn(req, res).catch(next);
+  const fail = (res: Response, status: number, error: string) => res.status(status).json({ error });
+
+  const baseUrl = (req: Request) => {
+    const { appUrl } = env();
+    if (appUrl) return appUrl;
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').split(',')[0].trim();
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+    return `${proto}://${host}`;
   };
 
-  const label = outcomeLabels[outcome] || outcome;
-  const logText = notes ? `${label} - ${notes}` : label;
-
-  leadData.log = [
-    {
-      t: now,
-      k: (outcome === 'na' || outcome === 'vm' || outcome === 'talk' ? outcome : 'call') as any,
-      x: `Call Disposition: ${logText}`
-    },
-    ...(leadData.log || [])
-  ];
-
-  if (newStatus !== leadData.status) {
-    leadData.status = newStatus;
-    leadData.stageAt = { ...(leadData.stageAt || {}), [newStatus]: now };
-  }
-
-  db.prepare('UPDATE leads SET status = ?, data_json = ?, updated_at = ? WHERE id = ?').run(
-    newStatus,
-    JSON.stringify(leadData),
-    now,
-    leadId
-  );
-
-  const logId = `CL_${now}_${Math.random().toString(36).substring(2, 6)}`;
-  db.prepare(`
-    INSERT INTO call_logs (id, user_id, lead_id, outcome, notes, timestamp, duration)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(logId, user.id, leadId, outcome, notes || '', now, durationSeconds || 0);
-
-  res.json({
-    success: true,
-    updatedStatus: newStatus,
-    updatedLead: leadData
-  });
-});
-
-// ----------------- 9. A2P 10DLC REGISTRATION PORTAL ----------------- //
-
-telephonyRouter.get('/a2p', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const registration = db.prepare('SELECT * FROM a2p_registrations WHERE user_id = ? ORDER BY submitted_at DESC LIMIT 1').get(user.id) as any;
-
-  if (!registration) {
-    return res.json({ registered: false, registration: null });
-  }
-
-  res.json({
-    registered: true,
-    registration: {
-      id: registration.id,
-      userId: registration.user_id,
-      brandSid: registration.brand_sid,
-      campaignSid: registration.campaign_sid,
-      businessName: registration.business_name,
-      ein: registration.ein,
-      businessType: registration.business_type,
-      brandType: registration.brand_type,
-      campaignUseCase: registration.campaign_use_case,
-      status: registration.status,
-      carrierFeedback: registration.carrier_feedback,
-      sampleMessage1: registration.sample_message1,
-      sampleMessage2: registration.sample_message2,
-      optInKeywords: registration.opt_in_keywords,
-      submittedAt: registration.submitted_at,
-      updatedAt: registration.updated_at
+  /** Rejects any webhook that Twilio didn't sign with your Auth Token. */
+  const fromTwilio: RequestHandler = (req, res, next) => {
+    const { authToken, accountSid } = env();
+    if (!authToken) {
+      res.status(503).type('text/plain').send('Twilio is not configured');
+      return;
     }
-  });
-});
-
-telephonyRouter.post('/a2p', (req: Request, res: Response) => {
-  const user = getAuthUser(req);
-  if (!user) return res.status(401).json({ error: 'Authentication required' });
-
-  const {
-    businessName,
-    ein,
-    businessType,
-    brandType,
-    campaignUseCase,
-    sampleMessage1,
-    sampleMessage2,
-    optInKeywords
-  } = req.body;
-
-  if (!businessName || !ein) {
-    return res.status(400).json({ error: 'Legal business name and Tax ID / EIN are required' });
-  }
-
-  const id = `a2p_${Date.now()}`;
-  const brandSid = `BN_${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-  const campaignSid = `CP_${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-  const now = new Date().toISOString();
-
-  db.prepare(`
-    INSERT INTO a2p_registrations (
-      id, user_id, brand_sid, campaign_sid, business_name, ein, business_type, brand_type,
-      campaign_use_case, status, sample_message1, sample_message2, opt_in_keywords, submitted_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_review', ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    user.id,
-    brandSid,
-    campaignSid,
-    businessName,
-    ein,
-    businessType || 'llc',
-    brandType || 'STANDARD',
-    campaignUseCase || 'Mortgage Protection & Final Expense Appointment Care',
-    sampleMessage1 || '',
-    sampleMessage2 || '',
-    optInKeywords || 'START, YES, AGREE',
-    now,
-    now
-  );
-
-  res.json({
-    success: true,
-    registration: {
-      id,
-      brandSid,
-      campaignSid,
-      status: 'in_review',
-      businessName,
-      submittedAt: now
+    const sig = req.header('X-Twilio-Signature') || '';
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+    const candidates = new Set([`${proto}://${host}${req.originalUrl}`, `https://${host}${req.originalUrl}`]);
+    if (env().appUrl) candidates.add(`${env().appUrl}${req.originalUrl}`);
+    const params = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, string>;
+    const valid = [...candidates].some(url => twilio.validateRequest(authToken, sig, url, params));
+    if (!valid || (params.AccountSid && accountSid && params.AccountSid !== accountSid)) {
+      console.warn('[Twilio] Rejected unsigned or mismatched webhook', req.originalUrl);
+      res.status(403).type('text/plain').send('Invalid Twilio signature');
+      return;
     }
+    next();
+  };
+
+  const myNumbers = async (userId: string) =>
+    (await numbers.where('userId', userId)).sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary));
+
+  /** Caller ID always comes from the agent's own numbers: same state as the lead first, then primary. */
+  const pickCallerId = async (userId: string, state: string) => {
+    const mine = (await myNumbers(userId)).filter(n => n.capabilitiesVoice);
+    const cfg = await configs.get(userId);
+    return (
+      mine.find(n => state && n.region === state)?.phoneNumber ||
+      mine.find(n => n.phoneNumber === cfg?.primaryCallerId)?.phoneNumber ||
+      mine.find(n => n.isPrimary)?.phoneNumber ||
+      mine[0]?.phoneNumber ||
+      env().defaultCallerId
+    );
+  };
+
+  const findLeadByPhone = async (userId: string, phone: string) => {
+    const d = digits(phone);
+    if (d.length !== 10) return null;
+    return (await leads.where('phoneDigits', d)).find(l => l.userId === userId) || null;
+  };
+
+  const userFromIdentity = async (from: unknown) => {
+    const m = String(from || '').match(/^client:agent_(.+)$/);
+    return m ? users.get(m[1]) : null;
+  };
+
+  /** TwiML that dials a lead, or explains to the agent why it won't. Logs the dial on the lead. */
+  const dialLead = async (req: Request, user: UserDoc, lead: LeadDoc | null, manualTo: string) => {
+    const vr = new twilio.twiml.VoiceResponse();
+    let to = toUSE164(manualTo);
+    let state = '';
+    if (lead) {
+      const check = checkLeadCall(lead.data, user.profile);
+      if (!check.ok) {
+        vr.say(check.reason);
+        return vr;
+      }
+      to = check.to;
+      state = check.state;
+    } else if (!to) {
+      vr.say('That is not a valid U.S. phone number.');
+      return vr;
+    }
+    const callerId = await pickCallerId(user.id, state);
+    if (!callerId) {
+      vr.say('You do not have a caller ID number yet. Buy a number in CallDesk, then call again.');
+      return vr;
+    }
+    const cfg = await configs.get(user.id);
+    const q = new URLSearchParams({ u: user.id, l: lead?.leadId || '' }).toString();
+    const dial = vr.dial({
+      callerId,
+      answerOnBridge: true,
+      timeout: 25,
+      action: `${baseUrl(req)}/api/telephony/voice/dial-complete?${q}`,
+      method: 'POST',
+      ...(cfg?.recordCalls ? { record: 'record-from-answer-dual' as const } : {}),
+    });
+    dial.number(to);
+    if (lead) {
+      await appendLeadLog(store, user.id, lead.leadId, { t: Date.now(), k: 'call', x: `Called from ${pretty(callerId)}` }, d => {
+        d.dials = (Number(d.dials) || 0) + 1;
+        d.lastDial = Date.now();
+      });
+    }
+    return vr;
+  };
+
+  // ---------------- Status for the Settings panel (admin) ----------------
+  r.get('/diagnostics', auth, requireAdmin, (req, res) => {
+    const e = env();
+    const base = baseUrl(req);
+    res.json({
+      variables: {
+        accountSid: { name: 'TWILIO_ACCOUNT_SID', configured: isReal(e.accountSid, 'AC'), preview: e.accountSid ? `${e.accountSid.slice(0, 6)}…` : 'Missing' },
+        authToken: { name: 'TWILIO_AUTH_TOKEN', configured: e.authToken.length >= 32 && !e.authToken.startsWith('your_'), preview: e.authToken ? 'Set' : 'Missing' },
+        apiKey: { name: 'TWILIO_API_KEY', configured: isReal(e.apiKey, 'SK'), preview: e.apiKey ? `${e.apiKey.slice(0, 6)}…` : 'Missing' },
+        apiSecret: { name: 'TWILIO_API_SECRET', configured: e.apiSecret.length >= 16 && !e.apiSecret.startsWith('your_'), preview: e.apiSecret ? 'Set' : 'Missing' },
+        twimlAppSid: { name: 'TWILIO_TWIML_APP_SID', configured: isReal(e.twimlAppSid, 'AP'), preview: e.twimlAppSid ? `${e.twimlAppSid.slice(0, 6)}…` : 'Missing' },
+        messagingServiceSid: { name: 'TWILIO_MESSAGING_SERVICE_SID', configured: isReal(e.messagingServiceSid, 'MG'), preview: e.messagingServiceSid ? `${e.messagingServiceSid.slice(0, 6)}…` : 'Not set (optional until texting)' },
+      },
+      webhooks: {
+        voiceOutboundUrl: `${base}/api/telephony/voice/outbound`,
+        voiceInboundUrl: `${base}/api/telephony/voice/inbound`,
+        voiceStatusUrl: `${base}/api/telephony/voice/dial-complete`,
+        smsInboundUrl: `${base}/api/telephony/sms/inbound`,
+        smsStatusUrl: `${base}/api/telephony/sms/status`,
+      },
+      isLiveConnected: Boolean(twilioClient && isReal(e.accountSid, 'AC')),
+    });
   });
-});
+
+  // ---------------- Browser calling token ----------------
+  r.get('/token', auth, (req, res) => {
+    const e = env();
+    if (!e.accountSid || !e.apiKey || !e.apiSecret || !e.twimlAppSid) {
+      return fail(res, 503, 'Calling is not set up yet. Add the Twilio secrets (account, API key, TwiML App) and redeploy.');
+    }
+    const { AccessToken } = twilio.jwt;
+    const identity = `agent_${req.user!.id}`;
+    const token = new AccessToken(e.accountSid, e.apiKey, e.apiSecret, { identity, ttl: 3600 });
+    token.addGrant(new AccessToken.VoiceGrant({ outgoingApplicationSid: e.twimlAppSid, incomingAllow: true }));
+    res.json({ token: token.toJwt(), identity, isLive: true, ttl: 3600 });
+  });
+
+  // ---------------- Voice webhooks (Twilio → CallDesk) ----------------
+
+  // TwiML App Voice URL: the browser placed a call.
+  r.post('/voice/outbound', fromTwilio, wrap(async (req, res) => {
+    const user = await userFromIdentity(req.body.From);
+    if (!user || !user.isVerified) {
+      const vr = new twilio.twiml.VoiceResponse();
+      vr.say('This CallDesk account cannot place calls.');
+      return xml(res, vr);
+    }
+    const leadId = String(req.body.leadId || '');
+    let lead = leadId ? await leads.get(leadDocId(user.id, leadId)) : null;
+    if (!lead && req.body.To) lead = await findLeadByPhone(user.id, req.body.To);
+    xml(res, await dialLead(req, user, lead, String(req.body.To || '')));
+  }));
+
+  // Cell-bridge mode: Twilio called the agent's cell, and they answered.
+  r.post('/voice/bridge', fromTwilio, wrap(async (req, res) => {
+    const user = await users.get(String(req.query.u || ''));
+    const lead = user ? await leads.get(leadDocId(user.id, String(req.query.l || ''))) : null;
+    if (!user || !lead) return xml(res, EMPTY);
+    xml(res, await dialLead(req, user, lead, ''));
+  }));
+
+  // The lead's leg ended: log how it went (once per call).
+  r.post('/voice/dial-complete', fromTwilio, wrap(async (req, res) => {
+    const userId = String(req.query.u || '');
+    const leadId = String(req.query.l || '');
+    const sid = String(req.body.DialCallSid || req.body.CallSid || '');
+    if (userId && sid && (await events.create(`dial_${sid}`, { at: Date.now() }))) {
+      const status = String(req.body.DialCallStatus || 'completed');
+      const secs = Number(req.body.DialCallDuration || 0);
+      const label: Record<string, string> = { completed: `answered · ${fmtDuration(secs)}`, answered: `answered · ${fmtDuration(secs)}`, 'no-answer': 'no answer', busy: 'busy', failed: 'failed', canceled: 'hung up before it connected' };
+      const rec = req.body.RecordingUrl ? ` · recording: ${req.body.RecordingUrl}` : '';
+      if (leadId) await appendLeadLog(store, userId, leadId, { t: Date.now(), k: 'note', x: `Call result: ${label[status] || status}${rec}` });
+      await calls.set(sid, { id: sid, userId, leadId, callSid: sid, outcome: status, notes: rec.trim(), timestamp: Date.now(), duration: secs });
+    }
+    xml(res, EMPTY);
+  }));
+
+  // A lead called one of your numbers: ring the browser for 20 seconds, then your cell, then voicemail.
+  r.post('/voice/inbound', fromTwilio, wrap(async (req, res) => {
+    const vr = new twilio.twiml.VoiceResponse();
+    const owner = (await numbers.where('phoneNumber', toUSE164(req.body.To)))[0];
+    if (!owner) {
+      vr.say('Sorry, this number is not in service.');
+      vr.hangup();
+      return xml(res, vr);
+    }
+    const lead = await findLeadByPhone(owner.userId, req.body.From);
+    if (lead) {
+      await appendLeadLog(store, owner.userId, lead.leadId, { t: Date.now(), k: 'call', x: `Incoming call from ${pretty(toUSE164(req.body.From) || String(req.body.From))}` }, d => {
+        if (d.status === 'new') {
+          d.status = 'contacted';
+          d.stageAt = { ...((d.stageAt as object) || {}), contacted: Date.now() };
+        }
+      });
+    }
+    const q = new URLSearchParams({ u: owner.userId }).toString();
+    const dial = vr.dial({ timeout: 20, action: `${baseUrl(req)}/api/telephony/voice/inbound-fallback?${q}`, method: 'POST' });
+    dial.client(`agent_${owner.userId}`);
+    xml(res, vr);
+  }));
+
+  r.post('/voice/inbound-fallback', fromTwilio, wrap(async (req, res) => {
+    const vr = new twilio.twiml.VoiceResponse();
+    if (['completed', 'answered'].includes(String(req.body.DialCallStatus))) {
+      vr.hangup();
+      return xml(res, vr);
+    }
+    const userId = String(req.query.u || '');
+    const [user, cfg] = await Promise.all([users.get(userId), configs.get(userId)]);
+    const cell = toUSE164(cfg?.bridgePhone || user?.phone || '');
+    const q = new URLSearchParams({ u: userId }).toString();
+    if (cell) {
+      const dial = vr.dial({ timeout: 25, action: `${baseUrl(req)}/api/telephony/voice/voicemail?${q}`, method: 'POST' });
+      dial.number(cell);
+    } else {
+      vr.redirect({ method: 'POST' }, `${baseUrl(req)}/api/telephony/voice/voicemail?${q}`);
+    }
+    xml(res, vr);
+  }));
+
+  r.post('/voice/voicemail', fromTwilio, (req, res) => {
+    const vr = new twilio.twiml.VoiceResponse();
+    if (['completed', 'answered'].includes(String(req.body.DialCallStatus))) {
+      vr.hangup();
+      return xml(res, vr);
+    }
+    const q = new URLSearchParams({ u: String(req.query.u || '') }).toString();
+    vr.say('Thank you for calling EST8 Financial Group. Please leave your name and callback number after the tone.');
+    vr.record({ maxLength: 120, playBeep: true, action: `${baseUrl(req)}/api/telephony/voice/voicemail-saved?${q}`, method: 'POST' });
+    xml(res, vr);
+  });
+
+  r.post('/voice/voicemail-saved', fromTwilio, wrap(async (req, res) => {
+    const userId = String(req.query.u || '');
+    const lead = userId ? await findLeadByPhone(userId, req.body.From) : null;
+    if (lead && req.body.RecordingUrl && (await events.create(`vm_${req.body.RecordingSid || req.body.CallSid}`, { at: Date.now() }))) {
+      await appendLeadLog(store, userId, lead.leadId, { t: Date.now(), k: 'vm', x: `Voicemail from lead (${req.body.RecordingDuration || '?'}s): ${req.body.RecordingUrl}` });
+    }
+    const vr = new twilio.twiml.VoiceResponse();
+    vr.hangup();
+    xml(res, vr);
+  }));
+
+  // ---------------- Text webhooks ----------------
+  r.post('/sms/inbound', fromTwilio, wrap(async (req, res) => {
+    const from = String(req.body.From || '');
+    const body = String(req.body.Body || '').trim();
+    const owner = (await numbers.where('phoneNumber', toUSE164(req.body.To)))[0];
+    const lead = owner && body ? await findLeadByPhone(owner.userId, from) : null;
+    if (owner && lead && (await events.create(`sms_${req.body.MessageSid || `${from}_${Date.now()}`}`, { at: Date.now() }))) {
+      const now = Date.now();
+      const id = `msg_in_${now}_${Math.random().toString(36).slice(2, 6)}`;
+      await sms.set(id, { id, userId: owner.userId, leadId: lead.leadId, direction: 'inbound', fromNumber: from, toNumber: String(req.body.To), body, status: 'received', twilioSid: req.body.MessageSid || null, createdAt: now });
+      const kw = smsKeyword(body);
+      await appendLeadLog(store, owner.userId, lead.leadId, {
+        t: now,
+        k: 'text',
+        x: kw === 'stop' ? `Replied "${body}": opted out of texts` : kw === 'start' ? `Replied "${body}": opted back in to texts` : `Text from lead: "${body}"`,
+      }, d => {
+        if (kw === 'stop') d.smsOptOut = true;
+        if (kw === 'start') d.smsOptOut = false;
+      });
+    }
+    // Twilio sends the carrier-required STOP/HELP replies itself.
+    res.type('text/xml').send('<Response></Response>');
+  }));
+
+  r.post('/sms/status', fromTwilio, wrap(async (req, res) => {
+    const sid = String(req.body.MessageSid || '');
+    const row = sid ? (await sms.where('twilioSid', sid))[0] : null;
+    if (row) await sms.update(row._id, { status: String(req.body.MessageStatus || row.status) });
+    res.type('text/xml').send('<Response/>');
+  }));
+
+  // ---------------- Numbers ----------------
+  const canBuy: RequestHandler = (req, res, next) => {
+    if (req.user!.role === 'admin' || env().agentsMayBuyNumbers) return next();
+    fail(res, 403, 'Ask your administrator to add a phone number for you.');
+  };
+
+  r.get('/numbers/search', auth, canBuy, wrap(async (req, res) => {
+    if (!twilioClient) return fail(res, 503, 'Twilio is not connected yet, so numbers can’t be searched. Add the Twilio secrets first.');
+    const areaCode = String(req.query.areaCode || '').replace(/\D/g, '').slice(0, 3);
+    const state = stateCode(req.query.state);
+    if (!areaCode && !state) return fail(res, 400, 'Enter an area code or pick a state.');
+    const opts: Record<string, unknown> = { voiceEnabled: true, smsEnabled: true, limit: 10 };
+    if (areaCode) opts.areaCode = Number(areaCode);
+    else opts.inRegion = state;
+    try {
+      const found = await twilioClient.availablePhoneNumbers('US').local.list(opts);
+      res.json({
+        areaCode,
+        state,
+        numbers: found.map(n => ({
+          phoneNumber: n.phoneNumber, friendlyName: n.friendlyName, locality: n.locality, region: n.region,
+          postalCode: n.postalCode, rateCenter: n.rateCenter,
+          capabilities: { voice: Boolean(n.capabilities?.voice), sms: Boolean(n.capabilities?.sms), mms: Boolean(n.capabilities?.mms) },
+          monthlyCost: '',
+        })),
+      });
+    } catch (e) {
+      const err = e as { message?: string; code?: number };
+      fail(res, 502, `Twilio couldn’t search numbers: ${err.message || 'unknown error'}`);
+    }
+  }));
+
+  r.post('/numbers/buy', auth, canBuy, wrap(async (req, res) => {
+    if (!twilioClient) return fail(res, 503, 'Twilio is not connected yet, so numbers can’t be bought.');
+    const phoneNumber = toUSE164(req.body.phoneNumber);
+    if (!phoneNumber) return fail(res, 400, 'Pick a U.S. number to buy.');
+    const base = baseUrl(req);
+    const u = req.user!;
+    let bought: { sid: string; phoneNumber: string; friendlyName: string };
+    try {
+      bought = await twilioClient.incomingPhoneNumbers.create({
+        phoneNumber,
+        friendlyName: String(req.body.friendlyName || `EST8 · ${u.name}`).slice(0, 64),
+        voiceUrl: `${base}/api/telephony/voice/inbound`,
+        voiceMethod: 'POST',
+        smsUrl: `${base}/api/telephony/sms/inbound`,
+        smsMethod: 'POST',
+      });
+    } catch (e) {
+      const err = e as { message?: string };
+      return fail(res, 502, `Twilio couldn’t buy that number: ${err.message || 'unknown error'}. Nothing was charged.`);
+    }
+    let note = '';
+    const { messagingServiceSid } = env();
+    if (messagingServiceSid) {
+      try {
+        await twilioClient.messaging.v1.services(messagingServiceSid).phoneNumbers.create({ phoneNumberSid: bought.sid });
+      } catch (e) {
+        note = `Bought, but it couldn’t be added to your Messaging Service: ${(e as Error).message}. Add it in the Twilio Console before texting from it.`;
+      }
+    }
+    const mine = await myNumbers(u.id);
+    const doc: PhoneNumberDoc = {
+      id: bought.sid, userId: u.id, phoneNumber: bought.phoneNumber, friendlyName: bought.friendlyName || pretty(bought.phoneNumber),
+      twilioSid: bought.sid, region: stateCode(req.body.region), capabilitiesVoice: true, capabilitiesSms: true,
+      purchasedAt: new Date().toISOString(), isPrimary: mine.length === 0,
+    };
+    await numbers.set(doc.id, doc);
+    if (doc.isPrimary) await configs.update(u.id, { primaryCallerId: doc.phoneNumber });
+    res.json({ success: true, number: doc, note });
+  }));
+
+  r.get('/numbers/my', auth, wrap(async (req, res) => {
+    res.json({ numbers: (await myNumbers(req.user!.id)).map(({ _id, ...n }) => n) });
+  }));
+
+  r.patch('/numbers/:id/primary', auth, wrap(async (req, res) => {
+    const mine = await myNumbers(req.user!.id);
+    const target = mine.find(n => n.id === req.params.id);
+    if (!target) return fail(res, 404, 'Number not found.');
+    for (const n of mine) await numbers.update(n._id, { isPrimary: n.id === target.id });
+    await configs.update(req.user!.id, { primaryCallerId: target.phoneNumber });
+    res.json({ success: true, primaryId: target.id, primaryNumber: target.phoneNumber });
+  }));
+
+  // Releases the number in Twilio too, so it stops billing.
+  r.delete('/numbers/:id', auth, wrap(async (req, res) => {
+    const n = await numbers.get(req.params.id);
+    if (!n || (n.userId !== req.user!.id && req.user!.role !== 'admin')) return fail(res, 404, 'Number not found.');
+    if (twilioClient && n.twilioSid.startsWith('PN')) {
+      try {
+        await twilioClient.incomingPhoneNumbers(n.twilioSid).remove();
+      } catch (e) {
+        const err = e as { status?: number; message?: string };
+        if (err.status !== 404) return fail(res, 502, `Twilio couldn’t release the number: ${err.message}. It is still on your account.`);
+      }
+    }
+    await numbers.delete(n.id);
+    res.json({ success: true, deletedId: n.id });
+  }));
+
+  // ---------------- Calling settings ----------------
+  r.get('/config', auth, wrap(async (req, res) => {
+    const u = req.user!;
+    const cfg = await configs.get(u.id);
+    const primary = (await myNumbers(u.id)).find(n => n.isPrimary);
+    res.json({
+      config: {
+        callingMode: cfg?.callingMode || 'webrtc',
+        bridgePhone: cfg?.bridgePhone || u.phone || '',
+        primaryCallerId: cfg?.primaryCallerId || primary?.phoneNumber || '',
+        autoLogCall: cfg?.autoLogCall ?? true,
+        recordCalls: cfg?.recordCalls ?? false,
+      },
+    });
+  }));
+
+  r.put('/config', auth, wrap(async (req, res) => {
+    const u = req.user!;
+    const { callingMode, bridgePhone, primaryCallerId, autoLogCall, recordCalls } = req.body;
+    const mine = await myNumbers(u.id);
+    await configs.set(u.id, {
+      callingMode: callingMode === 'bridge' ? 'bridge' : 'webrtc',
+      bridgePhone: String(bridgePhone || ''),
+      primaryCallerId: mine.some(n => n.phoneNumber === primaryCallerId) ? primaryCallerId : mine.find(n => n.isPrimary)?.phoneNumber || '',
+      autoLogCall: autoLogCall !== false,
+      recordCalls: Boolean(recordCalls),
+    });
+    res.json({ success: true });
+  }));
+
+  // ---------------- Cell-bridge call (Twilio rings your cell, then the lead) ----------------
+  r.post('/call', auth, wrap(async (req, res) => {
+    const u = req.user!;
+    if (!twilioClient) return fail(res, 503, 'Twilio is not connected yet, so calls can’t be placed.');
+    const lead = await leads.get(leadDocId(u.id, String(req.body.leadId || '')));
+    if (!lead) return fail(res, 404, 'Lead not found.');
+    const check = checkLeadCall(lead.data, u.profile);
+    if (!check.ok) return fail(res, 409, check.reason);
+    const cfg = await configs.get(u.id);
+    const cell = toUSE164(cfg?.bridgePhone || u.phone || '');
+    if (!cell) return fail(res, 400, 'Add your cell number in calling settings to use Cell Bridge.');
+    const callerId = await pickCallerId(u.id, check.state);
+    if (!callerId) return fail(res, 400, 'Buy a caller ID number first.');
+    const q = new URLSearchParams({ u: u.id, l: lead.leadId }).toString();
+    try {
+      const call = await twilioClient.calls.create({ to: cell, from: callerId, url: `${baseUrl(req)}/api/telephony/voice/bridge?${q}`, method: 'POST' });
+      res.json({ success: true, callId: call.sid, mode: 'bridge', callerId, message: `Calling your cell (${pretty(cell)}). Answer it and you’ll be connected to the lead.` });
+    } catch (e) {
+      fail(res, 502, `Twilio couldn’t start the call: ${(e as Error).message}`);
+    }
+  }));
+
+  // ---------------- Texts ----------------
+  r.get('/sms/messages', auth, wrap(async (req, res) => {
+    const u = req.user!;
+    const asId = String(req.query.as_user_id || '');
+    const ownerId = asId && u.role === 'admin' ? asId : u.id;
+    const leadId = String(req.query.leadId || '');
+    if (!leadId) return fail(res, 400, 'leadId is required');
+    const rows = (await sms.where('leadId', leadId)).filter(m => m.userId === ownerId).sort((a, b) => a.createdAt - b.createdAt);
+    res.json({ messages: rows.map(({ _id, userId, twilioSid, ...m }) => m) });
+  }));
+
+  r.post('/sms', auth, wrap(async (req, res) => {
+    const u = req.user!;
+    const body = String(req.body.body || '').trim();
+    const lead = await leads.get(leadDocId(u.id, String(req.body.leadId || '')));
+    if (!lead) return fail(res, 404, 'Lead not found.');
+    if (!body) return fail(res, 400, 'Write a message first.');
+    if (body.length > 1500) return fail(res, 400, 'Keep texts under 1,500 characters.');
+    if (lead.data.status === 'dnc') return fail(res, 409, 'This lead is marked Do not call, so texting is blocked.');
+    if (lead.data.smsOptOut) return fail(res, 409, 'This lead replied STOP, so texting is blocked.');
+    const to = toUSE164(lead.data.phone);
+    if (!to) return fail(res, 400, 'This lead does not have a valid U.S. phone number.');
+    if (!twilioClient) return fail(res, 503, 'Twilio is not connected yet, so texts can’t be sent.');
+    const { messagingServiceSid } = env();
+    const from = await pickCallerId(u.id, stateCode(lead.data.state));
+    if (!messagingServiceSid && !from) return fail(res, 400, 'Buy a number first so texts have a number to come from.');
+
+    const now = Date.now();
+    const id = `msg_${now}_${Math.random().toString(36).slice(2, 6)}`;
+    const record: SmsDoc = { id, userId: u.id, leadId: lead.leadId, direction: 'outbound', fromNumber: from, toNumber: to, body, status: 'queued', twilioSid: null, createdAt: now };
+    try {
+      const sent = await twilioClient.messages.create({
+        to,
+        body,
+        statusCallback: `${baseUrl(req)}/api/telephony/sms/status`,
+        ...(messagingServiceSid ? { messagingServiceSid } : { from }),
+      });
+      record.twilioSid = sent.sid;
+      record.status = sent.status || 'queued';
+      record.fromNumber = sent.from || from;
+    } catch (e) {
+      const err = e as { code?: number; message?: string };
+      record.status = 'failed';
+      await sms.set(id, record);
+      const why =
+        err.code === 21608 ? 'Your Twilio account is in trial mode, so it can only text numbers verified in Twilio. Upgrade Twilio or verify this number.'
+        : err.code === 21610 ? 'This number has opted out of texts from you (they replied STOP).'
+        : err.code === 30034 || err.code === 30032 ? 'Carriers blocked it because your A2P 10DLC registration isn’t approved yet.'
+        : `Twilio couldn’t send it: ${err.message || 'unknown error'}${err.code ? ` (error ${err.code})` : ''}.`;
+      return fail(res, 502, why);
+    }
+    await sms.set(id, record);
+    await appendLeadLog(store, u.id, lead.leadId, { t: now, k: 'text', x: `Text sent: "${body.length > 70 ? body.slice(0, 67) + '…' : body}"` });
+    res.json({ success: true, messageId: id, messageSid: record.twilioSid, status: record.status, sentAt: new Date(now).toISOString() });
+  }));
+
+  // Outcome the agent picks after a call.
+  r.post('/call/disposition', auth, wrap(async (req, res) => {
+    const u = req.user!;
+    const { leadId, outcome, notes, appointmentDate, appointmentTime, durationSeconds } = req.body;
+    const labels: Record<string, string> = { na: 'No answer', vm: 'Left voicemail', talk: 'Talked with them', appt: 'Appointment set', quoted: 'Quoted', dnc: 'Do not call', notint: 'Not interested' };
+    if (!labels[outcome]) return fail(res, 400, 'Pick an outcome.');
+    const nextStatus: Record<string, string> = { appt: 'appt', quoted: 'quoted', talk: 'contacted', dnc: 'dnc', notint: 'notint' };
+    const now = Date.now();
+    const updated = await appendLeadLog(store, u.id, String(leadId), { t: now, k: 'note', x: `Call outcome: ${labels[outcome]}${notes ? ` · ${notes}` : ''}` }, d => {
+      const ns = nextStatus[outcome];
+      if (outcome === 'talk' && d.status !== 'new') return; // don't move an advanced lead back to Contacted
+      if (ns && ns !== d.status) {
+        d.status = ns;
+        d.stageAt = { ...((d.stageAt as object) || {}), [ns]: now };
+      }
+      if (outcome === 'appt') {
+        if (appointmentDate) d.apptDay = appointmentDate;
+        if (appointmentTime) d.apptTime = appointmentTime;
+      }
+    });
+    if (!updated) return fail(res, 404, 'Lead not found.');
+    const logId = `CL_${now}_${Math.random().toString(36).slice(2, 6)}`;
+    await calls.set(logId, { id: logId, userId: u.id, leadId: String(leadId), callSid: null, outcome, notes: notes || '', timestamp: now, duration: Number(durationSeconds) || 0 });
+    res.json({ success: true, updatedStatus: updated.status, updatedLead: updated });
+  }));
+
+  // ---------------- A2P 10DLC status, read from Twilio ----------------
+  r.get('/a2p', auth, wrap(async (_req, res) => {
+    const { messagingServiceSid } = env();
+    if (!twilioClient || !messagingServiceSid) return res.json({ registered: false, registration: null, configured: false });
+    try {
+      const list = await twilioClient.messaging.v1.services(messagingServiceSid).usAppToPerson.list({ limit: 5 });
+      const c = list[0];
+      if (!c) return res.json({ registered: false, registration: null, configured: true });
+      const map: Record<string, string> = { VERIFIED: 'approved', PENDING: 'in_review', IN_PROGRESS: 'in_review', FAILED: 'rejected' };
+      res.json({
+        registered: true,
+        configured: true,
+        registration: {
+          id: c.sid, userId: '', brandSid: c.brandRegistrationSid, campaignSid: c.sid, businessName: '', ein: '',
+          businessType: 'llc', brandType: 'STANDARD', campaignUseCase: c.usAppToPersonUsecase || '',
+          status: map[String(c.campaignStatus)] || 'pending', carrierFeedback: (c.errors || []).map(x => JSON.stringify(x)).join('; '),
+          submittedAt: c.dateCreated ? new Date(c.dateCreated).toISOString() : '', updatedAt: c.dateUpdated ? new Date(c.dateUpdated).toISOString() : '',
+        },
+      });
+    } catch (e) {
+      res.json({ registered: false, registration: null, configured: true, error: `Couldn’t read A2P status from Twilio: ${(e as Error).message}` });
+    }
+  }));
+
+  return r;
+}
